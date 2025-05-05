@@ -1,6 +1,9 @@
 * Prowj
 
 (This project is under development and not yet released)
+
 This project for the users who want control project commands easily.
+
 You can integrate commands with Projectile or Project(built-in Emacs project).
+
 And also offered an frame and buffer options to execute proejct commands. 
