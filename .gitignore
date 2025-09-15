@@ -2,3 +2,4 @@
 # for emacs
 .projectile
 .projectile-cache.eld
+.dir-locals.el
