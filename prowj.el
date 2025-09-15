@@ -225,22 +225,24 @@
     (select-frame-set-input-focus parent-frame)
     (make-frame-visible parent-frame)))
 
+(defun prowj-reload-dir-locals ()
+  "Reload dir locals for the current buffer."
+  (interactive)
+  (let ((enable-local-variables :all))
+	  (hack-dir-local-variables-non-file-buffer)))
+
 (defun prowj-run-project (&optional num)
   (interactive "p")
-  ;; (print num)
-  (wj/common-reload-dir-locals)
-  (cond
-    ((equal num 1)
-      (if (and (boundp 'prowj-run-default-dir)
-            (boundp 'prowj-run-command))
-        (if prowj-exec-command-frame-enable
-          (prowj-exec-command-frame
-            prowj-run-default-dir prowj-run-command)
-          (prowj-exec-command-window
-            prowj-run-default-dir prowj-run-command))
-        (message
-          "\"projectile-project-root\" and \"prowj-run-command were not binded.")))))
-
+  (call-interactively #prowj-reload-dir-locals)
+  (if (and (boundp 'prowj-run-default-dir)
+        (boundp 'prowj-run-command))
+    (if prowj-exec-command-frame-enable
+      (prowj-exec-command-frame
+        prowj-run-default-dir prowj-run-command)
+      (prowj-exec-command-window
+        prowj-run-default-dir prowj-run-command))
+    (message
+      "\"projectile-project-root\" and \"prowj-run-command were not binded.")))
 
 (defun prowj-run-prev-command ()
   "Run previous project command."
@@ -253,6 +255,7 @@
 
 
 (defun prowj-subcmd-list ()
+  "List and execute sub commands."
   (interactive)
   (let ((subcmds-temp)
          (choice)
@@ -287,6 +290,5 @@
 (global-set-key (kbd "C-c c r") 'prowj-run-project)
 (global-set-key (kbd "C-c c l") 'prowj-subcmd-list)
 (global-set-key (kbd "C-c c f") 'prowj-focus-log-window)
-
 
 (provide 'prowj)

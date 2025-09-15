@@ -1,5 +1,5 @@
-
 # for emacs
+*.elc
 .projectile
 .projectile-cache.eld
 .dir-locals.el
