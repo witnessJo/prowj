@@ -233,7 +233,7 @@
 
 (defun prowj-run-project (&optional num)
   (interactive "p")
-  (call-interactively #prowj-reload-dir-locals)
+  (call-interactively #'prowj-reload-dir-locals)
   (if (and (boundp 'prowj-run-default-dir)
         (boundp 'prowj-run-command))
     (if prowj-exec-command-frame-enable
@@ -290,5 +290,6 @@
 (global-set-key (kbd "C-c c r") 'prowj-run-project)
 (global-set-key (kbd "C-c c l") 'prowj-subcmd-list)
 (global-set-key (kbd "C-c c f") 'prowj-focus-log-window)
+(global-set-key (kbd "C-c c p") 'prowj-run-prev-command)
 
 (provide 'prowj)
