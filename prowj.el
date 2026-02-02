@@ -3,6 +3,12 @@
 ;; Copyright © 2025 Witness jo <witnessjo@gmail.com>
 
 (require 'cl-lib)
+(require 'ansi-color)
+
+(defcustom prowj-use-pty t
+  "Use PTY for colored output. Set nil for pipe (faster, no color)."
+  :type 'boolean
+  :group 'prowj)
 
 (defcustom prowj-exec-command-frame-enable nil
   "Enable to execute command in the new frame."
@@ -29,21 +35,18 @@
 (setq enable-local-eval t)
 
 (defun prowj-walkup-and-find-file (FILENAME &optional DIRECTORY)
-  "Walkup and find a file .
-'FILENAME' is a file name to fine
-'DIRECTORY' is a base directory name'"
+  "Walkup and find a file.
+'FILENAME' is a file name to find
+'DIRECTORY' is a base directory name"
   (let ((path-to-find)
          (parent-dir))
-
     (when (equal DIRECTORY "/")
       (error
         (format
-          "Coudlnt find the target file (\"%s\") (Last directory was \"/\")"
+          "Couldn't find the target file (\"%s\") (Last directory was \"/\")"
           FILENAME)))
-
     (if (equal DIRECTORY nil)
       (setq DIRECTORY default-directory))
-
     (setq path-to-find (format "%s%s" DIRECTORY FILENAME))
     (if (file-exists-p path-to-find)
       path-to-find
@@ -53,13 +56,13 @@
         (prowj-walkup-and-find-file FILENAME parent-dir)))))
 
 (defun prowj-walkup-and-find-project-root ()
-  (interactive)
   "Find .projectile and return project-root-path for projectile."
+  (interactive)
   (let ((project-path))
     (setq project-path (prowj-walkup-and-find-file prowj-root-file))
     (if (equal project-path nil)
       (progn
-        (message "Couldnt find a dot-projectile file.")
+        (message "Couldn't find a dot-projectile file.")
         "")
       (file-name-directory (directory-file-name project-path)))))
 
@@ -71,25 +74,21 @@
          (template))
     (setq target-directory (prowj-walkup-and-find-project-root))
     (unless (file-exists-p target-directory)
-      (error "Couldnt find \".projectile\" file"))
-
+      (error "Couldn't find \".projectile\" file"))
     (setq target-path
       (format "%s%s" target-directory ".dir-locals.el"))
     (unless (file-exists-p target-path)
       (setq template
         (concat
           "(\n"
-          (concat "(nil . (\n")
-          (format "(prowj-run-default-dir . \"%s\")\n"
-            target-directory)
-          (format "(prowj-run-command . \"none\")\n")
+          "(nil . (\n"
+          (format "(prowj-run-default-dir . \"%s\")\n" target-directory)
+          "(prowj-run-command . \"none\")\n"
           "(eval . (progn\n"
           "(setq prowj-subcmds\n"
           "(list\n"
-          (format "(list \"testcmd1\" \"ls\" \"%s\")))))\n"
-            target-directory)
-          ")\n"
-          ")\n"
+          (format "(list \"testcmd1\" \"ls\" \"%s\")))))\n" target-directory)
+          "))\n"
           ")\n"))
       (write-region template nil target-path))
     (find-file target-path)))
@@ -101,7 +100,7 @@
          (target-path))
     (setq target-directory (prowj-walkup-and-find-project-root))
     (unless (file-exists-p target-directory)
-      (error "Couldnt find \".projectile\" file"))
+      (error "Couldn't find \".projectile\" file"))
     (setq target-path
       (format "%s%s" target-directory ".dir-locals.el"))
     (find-file target-path)))
@@ -109,11 +108,10 @@
 (defun prowj-focus-log-window ()
   "Focus or create a log frame."
   (interactive)
-  (condition-case err
+  (condition-case nil
     (select-frame-by-name prowj-log-frame)
     (error
-      (progn
-        (make-frame `((name . "prowj-log"))))))
+      (make-frame `((name . ,prowj-log-frame)))))
   (select-frame-by-name prowj-log-frame))
 
 (defun prowj-switch-buffer-log-frame ()
@@ -125,124 +123,104 @@
       (call-interactively 'switch-to-buffer))
     (select-frame-set-input-focus parent-frame)))
 
-(defun prowj-exec-command-window (directory cmd &optional after-func)
-  "Execute a command in a comint buffer in the current window."
+(defun prowj--setup-process-buffer (buffer-name directory)
+  "Setup comint buffer with ANSI color support."
+  (let ((buf (get-buffer-create buffer-name)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t)
+             (inhibit-modification-hooks t))
+        (erase-buffer))
+      (unless (eq major-mode 'comint-mode)
+        (comint-mode))
+      ;; ANSI color 지원
+      (ansi-color-for-comint-mode-on)
+      ;; 환경변수 & 연결 타입
+      (setq-local process-environment
+        (cons "TERM=xterm-256color" process-environment))
+      (setq-local process-connection-type prowj-use-pty)
+      (setq-local default-directory directory)
+      ;; 성능: undo 비활성화
+      (setq-local buffer-undo-list t)
+      (buffer-disable-undo))
+    buf))
+
+(defun prowj--make-sentinel ()
+  "Return process sentinel."
+  (lambda (proc _event)
+    (when (memq (process-status proc) '(exit signal))
+      (with-current-buffer (process-buffer proc)
+        (goto-char (point-max))
+        (let ((inhibit-read-only t))
+          (insert "\n------ DONE ------\n"))
+        (compilation-mode)
+        (message "Done: %s" (buffer-name))))))
+
+(defun prowj--start-process (buffer-name buffer cmd)
+  "Start process."
+  (let ((proc
+          (if (string-match-p "/ssh:" default-directory)
+            (start-file-process-shell-command buffer-name buffer cmd)
+            (start-process-shell-command buffer-name buffer cmd))))
+    (when proc
+      (set-process-filter proc #'comint-output-filter)
+      (set-process-sentinel proc (prowj--make-sentinel)))
+    proc))
+
+(defun prowj--exec-command (directory cmd &optional new-frame)
+  "Execute CMD in DIRECTORY. NEW-FRAME if non-nil."
+  (unless (file-directory-p directory)
+    (error "Directory not found: %s" directory))
+  (when (or (null cmd) (string-empty-p cmd))
+    (error "Command is empty"))
+  (projectile-save-project-buffers)
+  (let* ((parent-frame (selected-frame))
+          (short-name (file-name-nondirectory (directory-file-name directory)))
+          (buffer-name (format "*prowj:%s*" short-name))
+          (existing (get-buffer buffer-name)))
+    ;; 기존 프로세스 정리
+    (when existing
+      (let ((proc (get-buffer-process existing)))
+        (when (and proc (process-live-p proc))
+          (kill-process proc)))
+      (kill-buffer existing))
+    ;; 프레임 처리
+    (when new-frame
+      (prowj-focus-log-window))
+    ;; 버퍼 설정 & 실행
+    (let ((buf (prowj--setup-process-buffer buffer-name directory)))
+      (switch-to-buffer buf)
+      (when new-frame (delete-other-windows))
+      (prowj--start-process buffer-name buf cmd))
+    ;; 포커스 복원
+    (when new-frame
+      (select-frame-set-input-focus parent-frame))))
+
+(defun prowj-exec-command-window (directory cmd &optional _after-func)
+  "Execute a command in the current window."
   (interactive)
-  (let ((proc)
-         (buffer-name (format "*wj/command-%s-%s*" directory cmd)))
-    (projectile-save-project-buffers)
-    (unless (file-directory-p directory)
-      (error (format "Couldnt find the directory %s\"" directory)))
+  (prowj--exec-command directory cmd nil))
 
-    (when (or (equal cmd nil) (string= cmd ""))
-      (error (format "Couldnt find  %s\"" cmd)))
-
-    (sleep-for 0.5)
-    (when (get-buffer buffer-name)
-      ;; remove buffer window
-      (kill-buffer buffer-name))
-
-    (with-current-buffer (get-buffer-create buffer-name)
-      (comint-mode)
-      (setq-local process-connection-type nil)
-      (setq default-directory directory)
-
-      (switch-to-buffer (current-buffer))
-
-      ;; check tramp buffer
-      (if (string-match-p "/ssh:" default-directory)
-        (setq proc
-          (progn
-            (start-file-process-shell-command
-              buffer-name (current-buffer) cmd)))
-        (setq proc
-          (progn
-            (start-process-shell-command
-              buffer-name (current-buffer) cmd))))
-      (when (not (null proc))
-        (set-process-filter proc 'comint-output-filter)
-        (set-process-sentinel
-          proc
-          (lambda (p e)
-            (with-current-buffer (get-buffer (process-buffer p))
-              ;; After process done
-              (compilation-mode)
-              (compilation-shell-minor-mode)
-              (message "Done!!"))))))))
-
-(defun prowj-exec-command-frame (directory cmd &optional after-func)
-  "Execute a command in a comint buffer in a new frame."
+(defun prowj-exec-command-frame (directory cmd &optional _after-func)
+  "Execute a command in a new frame."
   (interactive)
-  (let ((proc)
-         (parent-frame (selected-frame))
-         (default-directory
-           (if (not (file-directory-p directory))
-             (error "The directory was not existing")
-             directory))
-         (buffer-name (format "*wj/command-%s-%s*" directory cmd)))
-    (projectile-save-project-buffers)
-    (unless (file-directory-p directory)
-      (error (format "Couldnt find the directory %s\"" directory)))
-
-    (when (or (equal cmd nil) (string= cmd ""))
-      (error (format "Couldnt find  %s\"" cmd)))
-
-    (prowj-focus-log-window)
-    (sleep-for 0.5)
-
-    (when (get-buffer buffer-name)
-      (kill-buffer buffer-name))
-    (with-current-buffer (get-buffer-create buffer-name)
-      (comint-mode)
-      (setq-local process-connection-type nil)
-      (setq default-directory directory)
-
-      (switch-to-buffer (current-buffer))
-      (delete-other-windows)
-
-      ;; check tramp buffer
-      (if (string-match-p "/ssh:" default-directory)
-        (setq proc
-          (progn
-            (start-file-process-shell-command
-              buffer-name (current-buffer) cmd)))
-        (setq proc
-          (progn
-            (start-process-shell-command
-              buffer-name (current-buffer) cmd))))
-
-      (when (not (null proc))
-        (set-process-filter proc 'comint-output-filter)
-        (set-process-sentinel
-          proc
-          (lambda (p e)
-            (with-current-buffer (get-buffer (process-buffer p))
-              (compilation-mode)
-              (compilation-shell-minor-mode)
-              (message "Done!!"))))))
-
-    ;; After process done
-    (select-frame-set-input-focus parent-frame)
-    (make-frame-visible parent-frame)))
+  (prowj--exec-command directory cmd t))
 
 (defun prowj-reload-dir-locals ()
   "Reload dir locals for the current buffer."
   (interactive)
   (let ((enable-local-variables :all))
-	  (hack-dir-local-variables-non-file-buffer)))
+    (hack-dir-local-variables-non-file-buffer)))
 
-(defun prowj-run-project (&optional num)
+(defun prowj-run-project (&optional _num)
+  "Run the project command."
   (interactive "p")
   (call-interactively #'prowj-reload-dir-locals)
   (if (and (boundp 'prowj-run-default-dir)
         (boundp 'prowj-run-command))
     (if prowj-exec-command-frame-enable
-      (prowj-exec-command-frame
-        prowj-run-default-dir prowj-run-command)
-      (prowj-exec-command-window
-        prowj-run-default-dir prowj-run-command))
-    (message
-      "\"projectile-project-root\" and \"prowj-run-command were not binded.")))
+      (prowj-exec-command-frame prowj-run-default-dir prowj-run-command)
+      (prowj-exec-command-window prowj-run-default-dir prowj-run-command))
+    (message "prowj-run-default-dir and prowj-run-command were not bound.")))
 
 (defun prowj-run-prev-command ()
   "Run previous project command."
@@ -251,34 +229,23 @@
     (if prowj-exec-command-frame-enable
       (prowj-exec-command-frame prowj-prev-dir prowj-prev-cmd)
       (prowj-exec-command-window prowj-prev-dir prowj-prev-cmd))
-    (message "not executed any command yet!!!")))
-
+    (message "No command executed yet.")))
 
 (defun prowj-subcmd-list ()
   "List and execute sub commands."
   (interactive)
-  (let ((subcmds-temp)
-         (choice)
-         (cmd-cons))
-    (when (not (boundp 'prowj-subcmds))
-      nil)
-    (when (not (listp 'prowj-subcmds))
-      nil)
-    (setq subcmds-temp
-      (mapcar
-        (lambda (cmd)
-          (cons
-            (format "%s: \"%s\", %s"
-              (nth 0 cmd)
-              (nth 1 cmd)
-              (nth 2 cmd))
-            cmd))
-        prowj-subcmds))
-
-    (setq choice (completing-read "Select command: " subcmds-temp))
-
-    ;; exac choice commands
-    (setq cmd-cons (cdr (assoc choice subcmds-temp)))
+  (unless (and (boundp 'prowj-subcmds) (listp prowj-subcmds))
+    (user-error "No subcmds defined"))
+  (let* ((subcmds-temp
+           (mapcar
+             (lambda (cmd)
+               (cons
+                 (format "%s: \"%s\", %s"
+                   (nth 0 cmd) (nth 1 cmd) (nth 2 cmd))
+                 cmd))
+             prowj-subcmds))
+          (choice (completing-read "Select command: " subcmds-temp))
+          (cmd-cons (cdr (assoc choice subcmds-temp))))
     (setq prowj-prev-dir (nth 2 cmd-cons))
     (setq prowj-prev-cmd (nth 1 cmd-cons))
     (if prowj-exec-command-frame-enable
