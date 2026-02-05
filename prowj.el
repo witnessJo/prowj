@@ -175,7 +175,7 @@
   (projectile-save-project-buffers)
   (let* ((parent-frame (selected-frame))
           (short-name (file-name-nondirectory (directory-file-name directory)))
-          (buffer-name (format "*prowj:%s*" short-name))
+          (buffer-name (format "*prowj:%s:%s*" short-name cmd))
           (existing (get-buffer buffer-name)))
     ;; 기존 프로세스 정리
     (when existing
