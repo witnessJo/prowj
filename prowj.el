@@ -4,6 +4,10 @@
 
 (require 'cl-lib)
 (require 'ansi-color)
+(require 'comint)
+(require 'compile)
+
+(declare-function projectile-save-project-buffers "projectile")
 
 (defcustom prowj-use-pty t
   "Use PTY for colored output. Set nil for pipe (faster, no color)."
