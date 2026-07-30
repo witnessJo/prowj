@@ -191,6 +191,8 @@
       (switch-to-buffer buf)
       (when new-frame (delete-other-windows))
       (prowj--start-process buffer-name buf cmd))
+    ;; dir-locals 재로드
+    (call-interactively #'prowj-reload-dir-locals)
     ;; 포커스 복원
     (when new-frame
       (select-frame-set-input-focus parent-frame))))
@@ -210,17 +212,6 @@
   (interactive)
   (let ((enable-local-variables :all))
     (hack-dir-local-variables-non-file-buffer)))
-
-(defun prowj-run-project (&optional _num)
-  "Run the project command."
-  (interactive "p")
-  (call-interactively #'prowj-reload-dir-locals)
-  (if (and (boundp 'prowj-run-default-dir)
-        (boundp 'prowj-run-command))
-    (if prowj-exec-command-frame-enable
-      (prowj-exec-command-frame prowj-run-default-dir prowj-run-command)
-      (prowj-exec-command-window prowj-run-default-dir prowj-run-command))
-    (message "prowj-run-default-dir and prowj-run-command were not bound.")))
 
 (defun prowj-run-prev-command ()
   "Run previous project command."
@@ -254,7 +245,6 @@
 
 (global-set-key (kbd "C-c c m") 'prowj-make-dot-dir-locals-el)
 (global-set-key (kbd "C-c c v") 'prowj-visit-dot-dir-locals-el)
-(global-set-key (kbd "C-c c r") 'prowj-run-project)
 (global-set-key (kbd "C-c c l") 'prowj-subcmd-list)
 (global-set-key (kbd "C-c c f") 'prowj-focus-log-window)
 (global-set-key (kbd "C-c c p") 'prowj-run-prev-command)
