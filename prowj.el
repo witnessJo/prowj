@@ -217,6 +217,13 @@
   (let ((enable-local-variables :all))
     (hack-dir-local-variables-non-file-buffer)))
 
+(defun prowj-reload-dir-locals-all ()
+  "Reload dir locals for all buffers."
+  (interactive)
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (prowj-reload-dir-locals))))
+
 (defun prowj-run-prev-command ()
   "Run previous project command."
   (interactive)
