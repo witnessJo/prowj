@@ -127,6 +127,37 @@
       (call-interactively 'switch-to-buffer))
     (select-frame-set-input-focus parent-frame)))
 
+(defun prowj--log-frame (&optional create)
+  "Return the log frame, or nil when there is none.
+With CREATE non-nil, make the frame when it is missing.  Unlike
+`prowj-focus-log-window' the input focus is left on the frame that is
+selected right now."
+  (or (cl-find-if
+        (lambda (frame)
+          (equal (frame-parameter frame 'name) prowj-log-frame))
+        (frame-list))
+    (when create
+      (let* ((parent-frame (selected-frame))
+              (frame (make-frame `((name . ,prowj-log-frame)))))
+        (select-frame-set-input-focus parent-frame)
+        frame))))
+
+(defun prowj-switch-buffer-log-frame-from-parent-frame ()
+  "Switch to another buffer in the log frame from parent frame.
+Unlike `prowj-switch-buffer-log-frame', the log frame is never
+selected: the buffer name is read in the minibuffer of the current
+frame and only the log frame's window is redisplayed, so the point
+never leaves the buffer being worked on.  The log frame is created
+when it does not exist yet."
+  (interactive)
+  (let* ((frame (prowj--log-frame))
+          (buffer (read-buffer "Switch to buffer in log frame: "
+                    (other-buffer (current-buffer))))
+          (window (frame-selected-window (or frame (prowj--log-frame t)))))
+    (set-window-buffer window (get-buffer-create buffer))
+    (make-frame-visible (window-frame window))
+    (message "Log frame: %s" buffer)))
+
 (defun prowj--setup-process-buffer (buffer-name directory)
   "Setup comint buffer with ANSI color support."
   (let ((buf (get-buffer-create buffer-name)))
