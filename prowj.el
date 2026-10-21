@@ -1,18 +1,35 @@
-;;; prowj.el --- Manage project commands eaily -*- lexical-binding: t -*-
+;;; prowj.el --- Manage project commands and bounded run logs -*- lexical-binding: t -*-
 
 ;; Copyright © 2025 Witness jo <witnessjo@gmail.com>
+;; Author: Witness jo <witnessjo@gmail.com>
+;; Version: 0.2.0
+;; Package-Requires: ((emacs "29.1") (projectile "2.8.0"))
+;; Keywords: tools, processes
+;; URL: https://github.com/witnessJo/prowj
+
+;;; Commentary:
+;; Run project commands with colored, bounded log previews and complete log files.
+;; Required external packages are installed by package.el/package-vc.
+
+;;; Code:
 
 (require 'cl-lib)
-(require 'ansi-color)
-(require 'comint)
-(require 'compile)
+(require 'projectile)
 
-(declare-function projectile-save-project-buffers "projectile")
+(defgroup prowj nil
+  "Project command execution."
+  :group 'tools)
+
+(require 'prowj-runner)
 
 (defcustom prowj-use-pty t
-  "Use PTY for colored output. Set nil for pipe (faster, no color)."
+  "Legacy setting, ignored by the non-interactive project runner."
   :type 'boolean
   :group 'prowj)
+
+(make-obsolete-variable 'prowj-use-pty
+                        "Runs now use a pipe; use a terminal for interactive commands."
+                        "0.2.0")
 
 (defcustom prowj-exec-command-frame-enable nil
   "Enable to execute command in the new frame."
@@ -158,79 +175,9 @@ when it does not exist yet."
     (make-frame-visible (window-frame window))
     (message "Log frame: %s" buffer)))
 
-(defun prowj--setup-process-buffer (buffer-name directory)
-  "Setup comint buffer with ANSI color support."
-  (let ((buf (get-buffer-create buffer-name)))
-    (with-current-buffer buf
-      (let ((inhibit-read-only t)
-             (inhibit-modification-hooks t))
-        (erase-buffer))
-      (unless (eq major-mode 'comint-mode)
-        (comint-mode))
-      ;; ANSI color 지원
-      (ansi-color-for-comint-mode-on)
-      ;; 환경변수 & 연결 타입
-      (setq-local process-environment
-        (cons "TERM=xterm-256color" process-environment))
-      (setq-local process-connection-type prowj-use-pty)
-      (setq-local default-directory directory)
-      ;; 성능: undo 비활성화
-      (setq-local buffer-undo-list t)
-      (buffer-disable-undo))
-    buf))
-
-(defun prowj--make-sentinel ()
-  "Return process sentinel."
-  (lambda (proc _event)
-    (when (memq (process-status proc) '(exit signal))
-      (with-current-buffer (process-buffer proc)
-        (goto-char (point-max))
-        (let ((inhibit-read-only t))
-          (insert "\n------ DONE ------\n"))
-        (compilation-mode)
-        (message "Done: %s" (buffer-name))))))
-
-(defun prowj--start-process (buffer-name buffer cmd)
-  "Start process."
-  (let ((proc
-          (if (string-match-p "/ssh:" default-directory)
-            (start-file-process-shell-command buffer-name buffer cmd)
-            (start-process-shell-command buffer-name buffer cmd))))
-    (when proc
-      (set-process-filter proc #'comint-output-filter)
-      (set-process-sentinel proc (prowj--make-sentinel)))
-    proc))
-
 (defun prowj--exec-command (directory cmd &optional new-frame)
-  "Execute CMD in DIRECTORY. NEW-FRAME if non-nil."
-  (unless (file-directory-p directory)
-    (error "Directory not found: %s" directory))
-  (when (or (null cmd) (string-empty-p cmd))
-    (error "Command is empty"))
-  (projectile-save-project-buffers)
-  (let* ((parent-frame (selected-frame))
-          (short-name (file-name-nondirectory (directory-file-name directory)))
-          (buffer-name (format "*prowj:%s:%s*" short-name cmd))
-          (existing (get-buffer buffer-name)))
-    ;; 기존 프로세스 정리
-    (when existing
-      (let ((proc (get-buffer-process existing)))
-        (when (and proc (process-live-p proc))
-          (kill-process proc)))
-      (kill-buffer existing))
-    ;; 프레임 처리
-    (when new-frame
-      (prowj-focus-log-window))
-    ;; 버퍼 설정 & 실행
-    (let ((buf (prowj--setup-process-buffer buffer-name directory)))
-      (switch-to-buffer buf)
-      (when new-frame (delete-other-windows))
-      (prowj--start-process buffer-name buf cmd))
-    ;; dir-locals 재로드
-    (call-interactively #'prowj-reload-dir-locals)
-    ;; 포커스 복원
-    (when new-frame
-      (select-frame-set-input-focus parent-frame))))
+  "Execute non-interactive CMD in DIRECTORY, optionally in the log frame."
+  (prowj-runner-exec-command directory cmd new-frame))
 
 (defun prowj-exec-command-window (directory cmd &optional _after-func)
   "Execute a command in the current window."
@@ -255,6 +202,7 @@ when it does not exist yet."
     (with-current-buffer buf
       (prowj-reload-dir-locals))))
 
+;;;###autoload
 (defun prowj-run-prev-command ()
   "Run previous project command."
   (interactive)
@@ -264,6 +212,7 @@ when it does not exist yet."
       (prowj-exec-command-window prowj-prev-dir prowj-prev-cmd))
     (message "No command executed yet.")))
 
+;;;###autoload
 (defun prowj-subcmd-list ()
   "List and execute sub commands."
   (interactive)
@@ -292,3 +241,5 @@ when it does not exist yet."
 (global-set-key (kbd "C-c c p") 'prowj-run-prev-command)
 
 (provide 'prowj)
+
+;;; prowj.el ends here

@@ -1,9 +1,98 @@
 * Prowj
 
-(This project is under development and not yet released)
+Prowj runs project commands in the current window or a separate log frame.
+Version 0.2.0 includes its own bounded, colored command log runner.
+No personal Emacs configuration files are required.
 
-This project for the users who want control project commands easily.
+** Requirements and installation
 
-You can integrate commands with Projectile or Project(built-in Emacs project).
+- Emacs 29.1 or newer.
+- Projectile 2.8.0 or newer.  This is a required package dependency declared
+  in =prowj.el=; =package.el=/=package-vc= installs it and its dependencies.
+- =ansi-color=, =button=, =cl-lib= and =subr-x= are built into Emacs.
+- Ghostel is optional.  If Ghostel is installed,
+  its ANSI palette is used; otherwise Emacs's standard ANSI palette is used.
 
-And also offered an frame and buffer options to execute proejct commands. 
+Ensure your configured package archives provide Projectile (for example
+MELPA), then install with =M-x package-vc-install= and this repository URL:
+
+: https://github.com/witnessJo/prowj.git
+
+With a =use-package= version supporting =:vc=:
+
+#+begin_src emacs-lisp
+(use-package prowj
+  :vc (:url "https://github.com/witnessJo/prowj.git"))
+#+end_src
+
+Do not load =prowj-runner.el= separately: requiring =prowj= loads it.
+Missing required libraries produce an ordinary =require= error; loading
+Prowj never refreshes archives or downloads software behind the scenes.
+Dependency installation belongs to the package manager.
+
+Project commands still require their own external executables (Python,
+Node, build tools, etc.).  Prowj does not install project dependencies.
+
+** Project commands
+
+Create a =.projectile= marker and configure your project's =.dir-locals.el=
+using =M-x prowj-make-dot-dir-locals-el=.  Choose a configured command with
+=M-x prowj-subcmd-list= or =C-c c l=.  Use =C-c c p= to repeat the last command.
+=prowj-exec-command-frame-enable= chooses whether to use the log frame.
+
+Commands run asynchronously through =start-file-process-shell-command= with
+a pipe, in a =special-mode= derived log buffer.  TRAMP directories are
+handled by Emacs file handlers.  No compilation parser or terminal emulator
+is involved.
+Use a terminal for input prompts and full-screen applications.  The legacy
+=prowj-use-pty= variable is obsolete and no longer controls execution.
+
+** Readable, bounded logs
+
+- Program ANSI colors are preserved.  Important words are emphasized with
+  weight/underline rather than replacement foreground/background colors.
+- Long lines show a bounded preview and a =[full log]= button that opens
+  the original line in the complete log file.
+- The preview buffer keeps a bounded recent tail.  Complete ANSI-free text
+  logs are saved locally, including runs on remote hosts.
+- =C-c C-l= opens the complete log, =g= repeats the command, and =C-c C-k=
+  interrupts it.  The mode line reports Running, Finished, Failed or Stopped.
+- Click =file:line[:column]= or Python traceback locations to visit source.
+  =next-error= navigates these links in the retained preview.  Full compiler
+  diagnostic parsing and =recompile= are not used.
+- Exit status is displayed without switching major modes at process exit.
+
+#+begin_src emacs-lisp
+(setq prowj-runner-line-limit 2000
+      prowj-runner-buffer-limit 1000000
+      prowj-runner-highlight-words
+      '("ERROR" "WARNING" "FATAL" "FAILED" "SUCCESS" "Traceback" "Exception"))
+#+end_src
+
+The default archive directory is =$XDG_STATE_HOME/prowj/logs/=, or
+=~/.local/state/prowj/logs/= when =XDG_STATE_HOME= is unset.  Archives are
+retained until you remove them.  Archive write errors appear in the log
+header while output continues to be displayed.
+
+** Development checks
+
+The tests use built-in ERT and Python 3 as a synthetic output generator;
+Python is a test-only requirement, not a Prowj package dependency.
+
+: emacs -Q --batch -l tests/prowj-test.el -f ert-run-tests-batch-and-exit
+
+Optional integration test with fancy-compilation installed:
+
+: PROWJ_TEST_FANCY=1 emacs -Q --batch -l tests/prowj-test.el -f ert-run-tests-batch-and-exit
+
+Project commands are independent of compilation-mode and Doom modeline.
+They do not enter =compilation-in-progress= or invoke compilation hooks.
+Commands always start in their configured project directory, including when
+output is displayed in a separate log frame.
+
+The compact mode line shows =Run:2= when two commands in the same project are
+active, including commands started in different project subdirectories.
+Hover for the commands and project path; click to choose a running log.
+Finished buffers show =Done=, or =Done / Run:1= if another command is still
+running. Counts are updated at process start/exit, without project lookups
+or filesystem access during mode-line redisplay.
