@@ -28,9 +28,14 @@ The rest remains available in the complete log via a clickable button."
   :type 'directory)
 
 (defcustom prowj-runner-highlight-words
-  '("ERROR" "WARNING" "WARN" "CRITICAL" "FATAL" "FAILED" "FAILURE"
-    "SUCCESS" "Traceback" "Exception")
-  "Important log words to emphasize without replacing their ANSI colors."
+  '("ERROR" "ERR" "WARNING" "WARN" "CRITICAL" "FATAL" "PANIC"
+    "FAILED" "FAILURE" "Traceback" "Exception" "TIMEOUT" "DENIED"
+    "REFUSED" "UNAUTHORIZED" "FORBIDDEN" "UNREACHABLE" "INVALID"
+    "ABORTED" "CANCELLED" "CANCELED" "DEPRECATED" "RETRY" "RETRYING"
+    "SUCCESS" "SUCCEEDED" "PASSED" "READY" "COMPLETED" "CONNECTED"
+    "DISCONNECTED" "STARTED" "STOPPED" "OOM" "ENOENT" "EACCES"
+    "ECONNREFUSED" "ETIMEDOUT")
+  "Log words to emphasize case-insensitively, preserving their ANSI colors."
   :type '(repeat string))
 
 (defvar ghostel-color-palette)
@@ -73,6 +78,8 @@ The rest remains available in the complete log via a clickable button."
 
 (defun prowj-runner-setup-appearance ()
   "Use terminal colors and color-neutral emphasis in a run buffer."
+  (setq-local font-lock-defaults '(nil t t)
+              font-lock-keywords-case-fold-search t)
   (when (require 'ghostel-faces nil t)
     (push '(default ghostel-default default) face-remapping-alist)
     (setq-local ansi-color-normal-colors-vector (cl-subseq ghostel-color-palette 0 8)

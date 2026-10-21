@@ -22,7 +22,9 @@ With a =use-package= version supporting =:vc=:
 
 #+begin_src emacs-lisp
 (use-package prowj
-  :vc (:url "https://github.com/witnessJo/prowj.git"))
+  :vc (:url "https://github.com/witnessJo/prowj.git")
+  :config
+  (prowj-mode 1))
 #+end_src
 
 Do not load =prowj-runner.el= separately: requiring =prowj= loads it.
@@ -39,6 +41,10 @@ Create a =.projectile= marker and configure your project's =.dir-locals.el=
 using =M-x prowj-make-dot-dir-locals-el=.  Choose a configured command with
 =M-x prowj-subcmd-list= or =C-c c l=.  Use =C-c c p= to repeat the last command.
 =prowj-exec-command-frame-enable= chooses whether to use the log frame.
+
+Enable =M-x prowj-mode= for the global =C-c c= bindings.  Loading Prowj
+alone does not change global keys.  Disable the mode to expose existing
+bindings again; running commands continue unaffected.
 
 Commands run asynchronously through =start-file-process-shell-command= with
 a pipe, in a =special-mode= derived log buffer.  TRAMP directories are

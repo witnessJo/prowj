@@ -234,11 +234,24 @@ when it does not exist yet."
       (prowj-exec-command-frame (nth 2 cmd-cons) (nth 1 cmd-cons))
       (prowj-exec-command-window (nth 2 cmd-cons) (nth 1 cmd-cons)))))
 
-(global-set-key (kbd "C-c c m") 'prowj-make-dot-dir-locals-el)
-(global-set-key (kbd "C-c c v") 'prowj-visit-dot-dir-locals-el)
-(global-set-key (kbd "C-c c l") 'prowj-subcmd-list)
-(global-set-key (kbd "C-c c f") 'prowj-focus-log-window)
-(global-set-key (kbd "C-c c p") 'prowj-run-prev-command)
+(defvar prowj-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c c m") #'prowj-make-dot-dir-locals-el)
+    (define-key map (kbd "C-c c v") #'prowj-visit-dot-dir-locals-el)
+    (define-key map (kbd "C-c c l") #'prowj-subcmd-list)
+    (define-key map (kbd "C-c c f") #'prowj-focus-log-window)
+    (define-key map (kbd "C-c c p") #'prowj-run-prev-command)
+    map)
+  "Global keymap enabled by `prowj-mode'.")
+
+;;;###autoload
+(define-minor-mode prowj-mode
+  "Enable Prowj's project command key bindings globally.
+Disabling this mode restores access to underlying bindings.  Prowj
+commands and running processes remain available independently of this mode."
+  :global t
+  :lighter nil
+  :keymap prowj-mode-map)
 
 (provide 'prowj)
 

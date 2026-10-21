@@ -14,6 +14,43 @@
 (require 'prowj-runner)
 (require 'ert)
 
+(ert-deftest prowj-runner-test-case-insensitive-highlights ()
+  (with-temp-buffer
+    (prowj-run-mode)
+    (prowj-runner-insert-output
+     "error: warning success TraceBack eXcEpTiOn\ninfo: ready timeOut denied Retry ECONNREFUSED\nunsuccessful\n")
+    (font-lock-ensure)
+    (dolist (word '("error" "warning" "success" "TraceBack" "eXcEpTiOn"
+                    "ready" "timeOut" "denied" "Retry" "ECONNREFUSED"))
+      (goto-char (point-min))
+      (search-forward word)
+      (should (memq 'prowj-runner-important
+                    (ensure-list (get-text-property (1- (point)) 'face)))))
+    (goto-char (point-min))
+    (search-forward "info")
+    (should (memq 'prowj-runner-info
+                  (ensure-list (get-text-property (1- (point)) 'face))))
+    (search-forward "unsuccessful")
+    (should-not (get-text-property (1- (point)) 'face))))
+
+(ert-deftest prowj-test-global-mode-preserves-underlying-bindings ()
+  (let ((original-map (current-global-map))
+        (original-mode prowj-mode)
+        (test-map (make-sparse-keymap)))
+    (unwind-protect
+        (with-temp-buffer
+          (use-global-map test-map)
+          (define-key test-map (kbd "C-c c l") #'ignore)
+          (prowj-mode -1)
+          (should (eq (key-binding (kbd "C-c c l")) #'ignore))
+          (prowj-mode 1)
+          (should (eq (key-binding (kbd "C-c c l")) #'prowj-subcmd-list))
+          (should (eq (lookup-key test-map (kbd "C-c c l")) #'ignore))
+          (prowj-mode -1)
+          (should (eq (key-binding (kbd "C-c c l")) #'ignore)))
+      (use-global-map original-map)
+      (prowj-mode (if original-mode 1 -1)))))
+
 (defun prowj-runner-test-wait (buffer)
   (let ((process (get-buffer-process buffer))
         (deadline (+ (float-time) 15)))
