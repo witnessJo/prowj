@@ -206,6 +206,9 @@ The rest remains available in the complete log via a clickable button."
 (define-key prowj-run-mode-map (kbd "g") #'prowj-runner-rerun)
 (define-key prowj-run-mode-map (kbd "C-c C-k") #'prowj-runner-stop)
 (define-key prowj-run-mode-map (kbd "C-c C-c") #'prowj-runner-visit-source)
+;; Output is read-only, so TAB has nothing to indent: move between links.
+(define-key prowj-run-mode-map (kbd "TAB") #'forward-button)
+(define-key prowj-run-mode-map (kbd "<backtab>") #'backward-button)
 
 (defun prowj-runner-rerun ()
   "Repeat the command associated with this run buffer."

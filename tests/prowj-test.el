@@ -344,6 +344,19 @@
                    (should (equal (button-get button 'prowj-runner-source) "sample.py")))))
         (prowj-runner-next-error 1 nil)))))
 
+(ert-deftest prowj-runner-test-tab-moves-between-links ()
+  (with-temp-buffer
+    (prowj-run-mode)
+    (prowj-runner-insert-output "running\na.py:1:1: error\nb.py:2:1: error\n")
+    (goto-char (point-min))
+    (let ((first (next-button (point-min) t)))
+      (call-interactively (lookup-key prowj-run-mode-map (kbd "TAB")))
+      (should (equal (button-get (button-at (point)) 'prowj-runner-source) "a.py"))
+      (call-interactively (lookup-key prowj-run-mode-map (kbd "TAB")))
+      (should (equal (button-get (button-at (point)) 'prowj-runner-source) "b.py"))
+      (call-interactively (lookup-key prowj-run-mode-map (kbd "<backtab>")))
+      (should (= (point) (button-start first))))))
+
 (ert-deftest prowj-runner-test-source-location-split-across-chunks ()
   (with-temp-buffer
     (prowj-run-mode)
