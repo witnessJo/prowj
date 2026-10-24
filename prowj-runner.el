@@ -1,6 +1,7 @@
 ;;; prowj-runner.el --- Bounded project run logs -*- lexical-binding: t -*-
 
 (require 'ansi-color)
+(require 'ansi-osc)
 (require 'button)
 (require 'cl-lib)
 (require 'comint)
@@ -303,6 +304,11 @@ Only the bounded preview is scanned; no filesystem access is performed here."
         ;; redraw piles onto the same line.  START is a line beginning, so a
         ;; return that erases what an earlier chunk wrote is covered too.
         (comint-carriage-motion start (point-max))
+        ;; `ansi-color-apply' drops the cursor and erase sequences but
+        ;; leaves OSC alone, so a command that sets the terminal title
+        ;; would show the escape itself.  A sequence split across filter
+        ;; chunks carries no newline, so START still covers its opening.
+        (ansi-osc-apply-on-region start (point-max))
         (prowj-runner-link-sources start (point-max))))
     (prowj-runner-trim-output)
     (when following (goto-char (point-max)))
