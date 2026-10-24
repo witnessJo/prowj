@@ -470,6 +470,20 @@ log whatever the options say."
        ;; Housekeeping must not keep a run from starting.
        (message "Project log expiry failed: %s" (error-message-string err))))))
 
+(defun prowj-runner-log-prefix (project)
+  "Return the leading file name identifying a PROJECT run log.
+Keep letters of any script, so a project named in Korean still reads as
+itself, and fold away the whitespace and punctuation that a shell, a
+listing or a completion prompt would stumble over."
+  (let* ((name (if (stringp project)
+                   (file-name-nondirectory (directory-file-name project))
+                 ""))
+         (safe (string-trim (replace-regexp-in-string "[^[:alnum:]._-]+" "-" name)
+                            "[-._]+" "[-._]+")))
+    (when (string-empty-p safe) (setq safe "project"))
+    (format "%s-%s-" (if (> (length safe) 40) (substring safe 0 40) safe)
+            (format-time-string "%Y%m%d-%H%M%S"))))
+
 (defun prowj-runner-prepare-archive ()
   "Prepare a new local archive before starting the command."
   (setq-local prowj-runner-log-error nil)
@@ -479,8 +493,9 @@ log whatever the options say."
         (prowj-runner-expire-logs)
         (setq-local prowj-runner-log-file
                     (make-temp-file
-                     (expand-file-name (format-time-string "%Y%m%d-%H%M%S-")
-                                       prowj-runner-log-directory)
+                     (expand-file-name
+                      (prowj-runner-log-prefix prowj-runner-project)
+                      prowj-runner-log-directory)
                      nil ".log")))
     (file-error
      (setq-local prowj-runner-log-error (error-message-string err))
