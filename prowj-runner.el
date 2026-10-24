@@ -264,6 +264,12 @@ The rest remains available in the complete log via a clickable button."
       (setq prowj-runner-error-position (copy-marker position))
       (prowj-runner-open-source button))))
 
+(defconst prowj-runner-scan-look-back 512
+  "How far before new output the filter rescans.
+A source location or an escape sequence split by a chunk boundary is only
+recognised if the scan reaches back over its earlier half, and neither
+runs longer than this.")
+
 (defun prowj-runner-link-sources (start end)
   "Link simple file:line[:column] and Python traceback locations in START..END.
 Only the bounded preview is scanned; no filesystem access is performed here."
@@ -300,16 +306,24 @@ Only the bounded preview is scanned; no filesystem access is performed here."
       (let ((start (line-beginning-position)))
         (insert text)
         ;; Progress bars return to the start of the line to redraw themselves.
-        ;; Without this the carriage returns stay in the buffer as ^M and every
-        ;; redraw piles onto the same line.  START is a line beginning, so a
-        ;; return that erases what an earlier chunk wrote is covered too.
-        (comint-carriage-motion start (point-max))
-        ;; `ansi-color-apply' drops the cursor and erase sequences but
-        ;; leaves OSC alone, so a command that sets the terminal title
-        ;; would show the escape itself.  A sequence split across filter
-        ;; chunks carries no newline, so START still covers its opening.
-        (ansi-osc-apply-on-region start (point-max))
-        (prowj-runner-link-sources start (point-max))))
+        ;; Left alone the carriage returns stay in the buffer as ^M and every
+        ;; redraw piles onto the same line.  Scan from the new text rather than
+        ;; from START: output that never breaks a line leaves START far behind,
+        ;; and rescanning from there on every chunk is quadratic, while nothing
+        ;; before the new text and its look-back can have changed anyway.
+        ;; `comint-carriage-motion' works out the line beginning itself, so a
+        ;; return still erases the whole line.
+        (let ((fresh (max start (- (point-max)
+                                   (+ (length text)
+                                      prowj-runner-scan-look-back)))))
+          (comint-carriage-motion fresh (point-max))
+          ;; A return in TEXT erases the line, so the buffer can be shorter now.
+          (setq fresh (min fresh (point-max)))
+          ;; `ansi-color-apply' drops the cursor and erase sequences but leaves
+          ;; OSC alone, so a command that sets the terminal title would show
+          ;; the escape itself.  The look-back covers one split across chunks.
+          (ansi-osc-apply-on-region fresh (point-max))
+          (prowj-runner-link-sources fresh (point-max)))))
     (prowj-runner-trim-output)
     (when following (goto-char (point-max)))
     (dolist (window windows) (set-window-point window (point-max)))))
