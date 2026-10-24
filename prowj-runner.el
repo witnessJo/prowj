@@ -3,6 +3,7 @@
 (require 'ansi-color)
 (require 'button)
 (require 'cl-lib)
+(require 'comint)
 (require 'subr-x)
 
 (defgroup prowj-runner nil
@@ -297,6 +298,11 @@ Only the bounded preview is scanned; no filesystem access is performed here."
       (goto-char end)
       (let ((start (line-beginning-position)))
         (insert text)
+        ;; Progress bars return to the start of the line to redraw themselves.
+        ;; Without this the carriage returns stay in the buffer as ^M and every
+        ;; redraw piles onto the same line.  START is a line beginning, so a
+        ;; return that erases what an earlier chunk wrote is covered too.
+        (comint-carriage-motion start (point-max))
         (prowj-runner-link-sources start (point-max))))
     (prowj-runner-trim-output)
     (when following (goto-char (point-max)))
