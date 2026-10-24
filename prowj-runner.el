@@ -29,6 +29,19 @@ The rest remains available in the complete log via a clickable button."
   "Local directory holding complete, ANSI-free run logs."
   :type 'directory)
 
+(defcustom prowj-runner-log-keep 50
+  "Number of recent run logs to keep in `prowj-runner-log-directory'.
+Surplus logs are deleted when a run starts.  nil keeps every log."
+  :type '(choice (natnum :tag "Logs to keep")
+                 (const :tag "Keep every log" nil)))
+
+(defcustom prowj-runner-log-max-age 14
+  "Days a run log is kept in `prowj-runner-log-directory'.
+Older logs are deleted when a run starts, however few
+`prowj-runner-log-keep' would allow.  nil keeps logs of every age."
+  :type '(choice (natnum :tag "Days")
+                 (const :tag "Keep logs of every age" nil)))
+
 (defcustom prowj-runner-highlight-words
   '("ERROR" "ERR" "WARNING" "WARN" "CRITICAL" "FATAL" "PANIC"
     "FAILED" "FAILURE" "Traceback" "Exception" "TIMEOUT" "DENIED"
@@ -411,12 +424,59 @@ Only the bounded preview is scanned; no filesystem access is performed here."
             (unless (string-empty-p preview)
               (prowj-runner-insert-output preview))))))))
 
+(defun prowj-runner-logs-in-use ()
+  "Return the log files of runs that are still writing."
+  (delq nil
+        (mapcar (lambda (buffer)
+                  (with-current-buffer buffer
+                    (and prowj-runner-log-file
+                         (process-live-p (get-buffer-process buffer))
+                         prowj-runner-log-file)))
+                (buffer-list))))
+
+(defun prowj-runner-expire-logs ()
+  "Delete archived logs beyond the retention options.
+Keep the newest `prowj-runner-log-keep' logs and discard those older
+than `prowj-runner-log-max-age' days.  A run still writing keeps its
+log whatever the options say."
+  (interactive)
+  (when (and (file-directory-p prowj-runner-log-directory)
+             (or prowj-runner-log-keep prowj-runner-log-max-age))
+    (condition-case err
+        (let ((in-use (prowj-runner-logs-in-use))
+              (cutoff (and prowj-runner-log-max-age
+                           (time-subtract nil (* prowj-runner-log-max-age 86400))))
+              (kept 0)
+              (deleted 0)
+              logs)
+          (dolist (file (directory-files prowj-runner-log-directory t "\\.log\\'"))
+            (push (cons file (file-attribute-modification-time
+                              (file-attributes file)))
+                  logs))
+          ;; Newest first, so the survivors come before the count runs out.
+          (setq logs (sort logs (lambda (a b) (time-less-p (cdr b) (cdr a)))))
+          (pcase-dolist (`(,file . ,written) logs)
+            (if (or (member file in-use)
+                    (not (or (and cutoff (time-less-p written cutoff))
+                             (and prowj-runner-log-keep
+                                  (>= kept prowj-runner-log-keep)))))
+                (cl-incf kept)
+              (delete-file file)
+              (cl-incf deleted)))
+          (when (and deleted (called-interactively-p 'interactive))
+            (message "Deleted %d run log%s, kept %d"
+                     deleted (if (= deleted 1) "" "s") kept)))
+      (file-error
+       ;; Housekeeping must not keep a run from starting.
+       (message "Project log expiry failed: %s" (error-message-string err))))))
+
 (defun prowj-runner-prepare-archive ()
   "Prepare a new local archive before starting the command."
   (setq-local prowj-runner-log-error nil)
   (condition-case err
       (progn
         (make-directory prowj-runner-log-directory t)
+        (prowj-runner-expire-logs)
         (setq-local prowj-runner-log-file
                     (make-temp-file
                      (expand-file-name (format-time-string "%Y%m%d-%H%M%S-")
