@@ -338,54 +338,184 @@ reason to fail the command list."
             entries))))
     (nreverse entries)))
 
+(defconst prowj-configured-group "Project"
+  "The group the entries in `prowj-subcmds' are listed under.")
+
+(put 'prowj-discover-makefile 'prowj-discover-group "Makefile")
+(put 'prowj-discover-npm-scripts 'prowj-discover-group "npm")
+
+(defun prowj--project-root ()
+  "Return the project root directory, or nil when there is no project."
+  (let ((root (ignore-errors (prowj-walkup-and-find-project-root))))
+    (and root (not (string-empty-p root)) (file-name-as-directory root))))
+
+(defun prowj--discover-entries (root)
+  "Return (GROUP LABEL COMMAND DIRECTORY) for the task files in ROOT.
+A discovery function says which group its commands belong to through its
+`prowj-discover-group' property, and is listed under its own name
+without one."
+  (when (and root (not (string-empty-p root)))
+    (let ((directory (file-name-as-directory root))
+           (entries nil))
+      (dolist (function prowj-discover-functions)
+        (let ((group (or (get function 'prowj-discover-group)
+                       (symbol-name function))))
+          (dolist (entry (ignore-errors (funcall function directory)))
+            (push (cons group entry) entries))))
+      (setq entries (nreverse entries))
+      (if prowj-discover-ignore-regexp
+        (seq-remove (lambda (entry)
+                      (string-match-p prowj-discover-ignore-regexp (nth 1 entry)))
+          entries)
+        entries))))
+
 (defun prowj-discover-commands (&optional root)
   "Return the commands the task files in ROOT declare.
 ROOT defaults to the project root.  Nil when there is no project and
 when nothing declares a command, so a project without task files is no
 different from how it was before."
-  (let ((root (or root (ignore-errors (prowj-walkup-and-find-project-root)))))
-    (when (and root (not (string-empty-p root)))
-      (let ((directory (file-name-as-directory root))
-             (entries nil))
-        (dolist (function prowj-discover-functions)
-          (setq entries
-            (append entries (ignore-errors (funcall function directory)))))
-        (if prowj-discover-ignore-regexp
-          (seq-remove (lambda (entry)
-                        (string-match-p prowj-discover-ignore-regexp (nth 0 entry)))
-            entries)
-          entries)))))
+  (mapcar #'cdr (prowj--discover-entries (or root (prowj--project-root)))))
+
+(defun prowj--command-entries (&optional root)
+  "Return every command this project offers, configured ones first.
+Each is (GROUP LABEL COMMAND DIRECTORY).  The entries in `prowj-subcmds'
+are the ones written out by hand -- the combinations and the odd jobs no
+task file holds -- so they lead, and what the task files declare follows."
+  (append
+    (mapcar (lambda (entry) (cons prowj-configured-group entry))
+      (and (listp prowj-subcmds) prowj-subcmds))
+    (prowj--discover-entries (or root (prowj--project-root)))))
 
 (defun prowj-command-list ()
-  "Return this project's commands, configured ones first.
-The entries in `prowj-subcmds' are the ones written out by hand -- the
-combinations and the odd jobs no task file holds -- so they lead, and
-what the task files declare follows."
-  (append (and (listp prowj-subcmds) prowj-subcmds)
-    (prowj-discover-commands)))
+  "Return this project's commands as (LABEL COMMAND DIRECTORY)."
+  (mapcar #'cdr (prowj--command-entries)))
+
+;;; Choosing a command
+
+(defface prowj-annotation-command '((t :inherit completions-annotations))
+  "Face for the shell command shown beside a label in the command list."
+  :group 'prowj)
+
+(defface prowj-annotation-directory '((t :inherit (shadow completions-annotations)))
+  "Face for the directory shown beside a label in the command list."
+  :group 'prowj)
+
+(defcustom prowj-annotation-command-width 48
+  "Widest the command column in the command list may grow.
+Longer commands are shown cut short, so the directory beside them stays
+where the eye expects it."
+  :type 'natnum
+  :group 'prowj)
+
+(defun prowj--display-directory (directory root)
+  "Return DIRECTORY as it is shown in the command list, against ROOT."
+  (let ((directory (file-name-as-directory (expand-file-name directory))))
+    (if (and root (string-prefix-p root directory))
+      (let ((relative (file-relative-name directory root)))
+        (if (equal relative "./") "." (directory-file-name relative)))
+      (abbreviate-file-name (directory-file-name directory)))))
+
+(defun prowj--unique-label (label directory root taken)
+  "Return LABEL, made unique against the labels in TAKEN.
+Two commands sharing a label would leave one of them unreachable, so the
+directory telling them apart is added to the later one."
+  (if (not (member label taken))
+    label
+    (let ((candidate (format "%s [%s]" label
+                       (prowj--display-directory directory root))))
+      (if (member candidate taken)
+        (let ((n 2))
+          (while (member (format "%s<%d>" candidate n) taken)
+            (setq n (1+ n)))
+          (format "%s<%d>" candidate n))
+        candidate))))
+
+(defun prowj--command-alist (entries root)
+  "Return an alist of label to ENTRY for ENTRIES, each label unique.
+ENTRIES are (GROUP LABEL COMMAND DIRECTORY).  ROOT shortens any
+directory added to tell two identical labels apart."
+  (let ((taken nil))
+    (mapcar
+      (lambda (entry)
+        (let ((label (prowj--unique-label
+                       (nth 1 entry) (nth 3 entry) root taken)))
+          (push label taken)
+          (cons label entry)))
+      entries)))
+
+(defun prowj--completion-table (table root)
+  "Return a completion table over TABLE, annotated and grouped.
+TABLE is the alist `prowj--command-alist\=' builds.  The label alone is
+the candidate, so typing matches it and not the command or the path
+behind it; those are shown alongside.  ROOT shortens the directories
+under it."
+  (let* ((label-width (apply #'max 0 (mapcar (lambda (cell)
+                                                (string-width (car cell)))
+                                        table)))
+          (command-width
+            (min prowj-annotation-command-width
+              (apply #'max 0 (mapcar (lambda (cell)
+                                       (string-width (nth 2 (cdr cell))))
+                               table)))))
+    (lambda (string predicate action)
+      (cond
+        ((eq action 'metadata)
+          `(metadata
+             (category . prowj-command)
+             (display-sort-function . identity)
+             (cycle-sort-function . identity)
+             (group-function
+               . ,(lambda (candidate transform)
+                    (if transform
+                      candidate
+                      (nth 0 (cdr (assoc candidate table))))))
+             (affixation-function
+               . ,(lambda (candidates)
+                    (mapcar
+                      (lambda (candidate)
+                        (let* ((entry (cdr (assoc candidate table)))
+                                (command (nth 2 entry))
+                                (directory (nth 3 entry)))
+                          (list candidate
+                            ""
+                            (concat
+                              (make-string
+                                (max 1 (1+ (- label-width (string-width candidate))))
+                                ?\s)
+                              (propertize
+                                (truncate-string-to-width
+                                  command command-width nil ?\s t)
+                                'face 'prowj-annotation-command)
+                              "  "
+                              (propertize
+                                ;; The root is where nearly everything runs,
+                                ;; so the column speaks only for the rest.
+                                (let ((shown (prowj--display-directory
+                                               directory root)))
+                                  (if (equal shown ".") "" shown))
+                                'face 'prowj-annotation-directory)))))
+                      candidates)))))
+        (t (complete-with-action action table string predicate))))))
 
 ;;;###autoload
 (defun prowj-subcmd-list ()
   "List and execute sub commands."
   (interactive)
-  (let ((commands (prowj-command-list)))
-    (unless commands
+  (let* ((root (prowj--project-root))
+          (entries (prowj--command-entries root)))
+    (unless entries
       (user-error "No project command is configured, and no task file declares one"))
-    (let* ((subcmds-temp
-             (mapcar
-               (lambda (cmd)
-                 (cons
-                   (format "%s: \"%s\", %s"
-                     (nth 0 cmd) (nth 1 cmd) (nth 2 cmd))
-                   cmd))
-               commands))
-            (choice (completing-read "Select command: " subcmds-temp nil t))
-            (cmd-cons (cdr (assoc choice subcmds-temp))))
-      (setq prowj-prev-dir (nth 2 cmd-cons))
-      (setq prowj-prev-cmd (nth 1 cmd-cons))
+    (let* ((table (prowj--command-alist entries root))
+            (choice (completing-read "Project command: "
+                      (prowj--completion-table table root) nil t))
+            (entry (cdr (assoc choice table)))
+            (command (nth 2 entry))
+            (directory (nth 3 entry)))
+      (setq prowj-prev-dir directory)
+      (setq prowj-prev-cmd command)
       (if prowj-exec-command-frame-enable
-        (prowj-exec-command-frame (nth 2 cmd-cons) (nth 1 cmd-cons))
-        (prowj-exec-command-window (nth 2 cmd-cons) (nth 1 cmd-cons))))))
+        (prowj-exec-command-frame directory command)
+        (prowj-exec-command-window directory command)))))
 
 (defvar prowj-mode-map
   (let ((map (make-sparse-keymap)))

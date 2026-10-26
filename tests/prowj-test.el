@@ -521,3 +521,68 @@ bound to the root directory."
                 '("npm: dev"))))
     (let ((prowj-discover-functions nil))
       (should-not (prowj-discover-commands prowj-test-root)))))
+
+(ert-deftest prowj-test-command-alist-makes-labels-unique ()
+  (let* ((root "/tmp/project/")
+          (entries (list (list "Project" "build" "make build" "/tmp/project/")
+                     (list "npm" "build" "npm run build" "/tmp/project/client/")
+                     (list "npm" "build" "npm run build" "/tmp/project/admin/")))
+          (table (prowj--command-alist entries root)))
+    ;; Two commands under one label would leave one of them unreachable.
+    (should (equal (mapcar #'car table)
+              '("build" "build [client]" "build [admin]")))
+    (should (equal (nth 2 (cdr (assoc "build [client]" table))) "npm run build"))))
+
+(ert-deftest prowj-test-completion-table-annotates-and-groups ()
+  (let* ((root "/tmp/project/")
+          (entries (list (list "Project" "restart" "make stop && make build" root)
+                     (list "Makefile" "make: build" "make build" root)
+                     (list "npm" "npm[client]: dev" "npm run dev" "/tmp/project/client/")))
+          (table (prowj--command-alist entries root))
+          (completion (prowj--completion-table table root))
+          (metadata (cdr (funcall completion "" nil 'metadata)))
+          (affix (cdr (assq 'affixation-function metadata)))
+          (group (cdr (assq 'group-function metadata))))
+    (should (equal (cdr (assq 'category metadata)) 'prowj-command))
+    ;; The order the commands were built in is the order they are offered in.
+    (should (eq (cdr (assq 'display-sort-function metadata)) 'identity))
+    (should (equal (funcall group "make: build" nil) "Makefile"))
+    (should (equal (funcall group "make: build" t) "make: build"))
+    (let ((rows (funcall affix (mapcar #'car table))))
+      ;; The candidate is the label alone, so typing never matches a path.
+      (should (equal (mapcar #'car rows)
+                '("restart" "make: build" "npm[client]: dev")))
+      (should (string-match-p "make stop && make build"
+                (substring-no-properties (nth 2 (nth 0 rows)))))
+      ;; Everything runs at the root but the npm script, and only it says so.
+      (should-not (string-match-p "client" (substring-no-properties (nth 2 (nth 1 rows)))))
+      (should (string-match-p "client" (substring-no-properties (nth 2 (nth 2 rows)))))
+      ;; The columns line up: every suffix starts at the same width.
+      (should (apply #'= (mapcar (lambda (row)
+                                   (+ (string-width (nth 0 row))
+                                     (- (string-width (nth 2 row))
+                                       (string-width (string-trim-left (nth 2 row))))))
+                           rows))))))
+
+(ert-deftest prowj-test-completion-table-cuts-a-long-command ()
+  (let* ((root "/tmp/project/")
+          (long (make-string 200 ?x))
+          (entries (list (list "Project" "long" long root)))
+          (table (prowj--command-alist entries root))
+          (completion (prowj--completion-table table root))
+          (affix (cdr (assq 'affixation-function
+                        (cdr (funcall completion "" nil 'metadata)))))
+          (suffix (substring-no-properties
+                    (nth 2 (car (funcall affix (mapcar #'car table)))))))
+    (should (< (string-width suffix) (+ 20 prowj-annotation-command-width)))))
+
+(ert-deftest prowj-test-discover-entries-carry-their-group ()
+  (prowj-test-with-project
+    '(("Makefile" . "build:\n\techo ok\n")
+       ("package.json" . "{\"scripts\": {\"dev\": \"vite\"}}"))
+    (should (equal (mapcar (lambda (entry) (nth 0 entry))
+                     (prowj--discover-entries prowj-test-root))
+              '("Makefile" "npm")))
+    (let ((prowj-discover-functions '(ignore)))
+      ;; A function with no group of its own is listed under its name.
+      (should-not (prowj--discover-entries prowj-test-root)))))

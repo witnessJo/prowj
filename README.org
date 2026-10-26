@@ -72,6 +72,31 @@ configured entries alone -- =prowj-discover-npm-depth= how far below the
 root =package.json= is looked for, and =prowj-discover-skip-directories=
 which directories are left alone (=node_modules= among them).
 
+** Choosing a command
+
+The list groups the commands by where they come from and shows each
+one's command and directory beside its label:
+
+: ── Project ──
+:   restart        make stop && make build && make restart
+:   client build   npm run build                            wc-clients
+: ── Makefile ──
+:   make: build    make build
+: ── npm ──
+:   npm[wc-clients]: dev   npm run dev                      wc-clients
+
+The label alone is the candidate, so typing narrows the list by the name
+and never by the command or the path behind it, and the order is kept as
+built rather than sorted.  The directory is shown relative to the project
+root, and left blank for the root itself, where nearly everything runs.
+A completion UI that renders =affixation-function= and =group-function=,
+such as Vertico, draws the columns and the group headings; plain
+=completing-read= lists the labels.
+
+=prowj-annotation-command-width= caps the command column, and the faces
+=prowj-annotation-command= and =prowj-annotation-directory= colour the
+two annotations.  The completion category is =prowj-command=.
+
 Commands run asynchronously through =start-file-process-shell-command= with
 a pipe, in a =special-mode= derived log buffer.  TRAMP directories are
 handled by Emacs file handlers.  No compilation parser or terminal emulator
