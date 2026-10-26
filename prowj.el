@@ -37,14 +37,13 @@
   :type 'boolean
   :group 'prowj)
 
-(defconst prowj-output-buffer "*prowj-output*")
 (defconst prowj-log-frame "prowj-log")
-(defconst prowj-compile-buffer "prowj-compile-buffer")
 (defconst prowj-root-file ".projectile")
 
-(defvar prowj-prev-dir)
-(defvar prowj-prev-cmd)
-(defvar prowj-window-buffer-pair nil)
+(defvar prowj-prev-dir nil
+  "Directory the last project command was run in.")
+(defvar prowj-prev-cmd nil
+  "The last project command that was run.")
 
 (defvar-local prowj-run-default-dir nil)
 (defvar-local prowj-run-command nil)
@@ -56,26 +55,19 @@
 (setq enable-local-variables t)
 (setq enable-local-eval t)
 
-(defun prowj-walkup-and-find-file (FILENAME &optional DIRECTORY)
-  "Walkup and find a file.
-'FILENAME' is a file name to find
-'DIRECTORY' is a base directory name"
-  (let ((path-to-find)
-         (parent-dir))
-    (when (equal DIRECTORY "/")
-      (error
-        (format
-          "Couldn't find the target file (\"%s\") (Last directory was \"/\")"
-          FILENAME)))
-    (if (equal DIRECTORY nil)
-      (setq DIRECTORY default-directory))
-    (setq path-to-find (format "%s%s" DIRECTORY FILENAME))
-    (if (file-exists-p path-to-find)
-      path-to-find
-      (progn
-        (setq parent-dir
-          (file-name-directory (directory-file-name DIRECTORY)))
-        (prowj-walkup-and-find-file FILENAME parent-dir)))))
+(defun prowj-walkup-and-find-file (filename &optional directory)
+  "Return the path to FILENAME, looked for from DIRECTORY upwards.
+DIRECTORY defaults to `default-directory\='.  Signals an error once the
+root has been searched without finding FILENAME."
+  (let ((directory (or directory default-directory)))
+    (when (equal directory "/")
+      (error "Couldn't find the target file (\"%s\") (Last directory was \"/\")"
+             filename))
+    (let ((path (format "%s%s" directory filename)))
+      (if (file-exists-p path)
+        path
+        (prowj-walkup-and-find-file
+          filename (file-name-directory (directory-file-name directory)))))))
 
 (defun prowj-walkup-and-find-project-root ()
   "Find .projectile and return project-root-path for projectile."
@@ -207,7 +199,7 @@ when it does not exist yet."
 (defun prowj-run-prev-command ()
   "Run previous project command."
   (interactive)
-  (if (boundp 'prowj-prev-dir)
+  (if prowj-prev-cmd
     (if prowj-exec-command-frame-enable
       (prowj-exec-command-frame prowj-prev-dir prowj-prev-cmd)
       (prowj-exec-command-window prowj-prev-dir prowj-prev-cmd))
