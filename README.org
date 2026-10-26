@@ -46,6 +46,32 @@ Enable =M-x prowj-mode= for the global =C-c c= bindings.  Loading Prowj
 alone does not change global keys.  Disable the mode to expose existing
 bindings again; running commands continue unaffected.
 
+** Commands the project already declares
+
+The command list also holds what the project's own task files declare, so
+a target does not have to be written out a second time:
+
+- makefile targets, as =make: build=
+- =package.json= scripts, as =npm: build=, or =npm[wc-clients]: dev= for a
+  =package.json= in a subdirectory
+
+=prowj-subcmds= keeps its place and leads the list.  It is where the
+entries no task file holds belong: combinations such as
+=make stop && make build && make restart=, and one-off jobs.  A project
+with no task file behaves exactly as before.
+
+Discovery offers every target it finds, which means =deploy= and
+=push-docker= sit in the same list as =build=.  To keep those out:
+
+#+begin_src emacs-lisp
+(setq prowj-discover-ignore-regexp "deploy\\|push-docker")
+#+end_src
+
+=prowj-discover-functions= chooses what is read -- set it to nil for the
+configured entries alone -- =prowj-discover-npm-depth= how far below the
+root =package.json= is looked for, and =prowj-discover-skip-directories=
+which directories are left alone (=node_modules= among them).
+
 Commands run asynchronously through =start-file-process-shell-command= with
 a pipe, in a =special-mode= derived log buffer.  TRAMP directories are
 handled by Emacs file handlers.  No compilation parser or terminal emulator

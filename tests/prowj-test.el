@@ -431,3 +431,93 @@
           (when-let* ((process (get-buffer-process buffer))) (delete-process process))
           (kill-buffer buffer)))
       (delete-directory directory t))))
+
+(defmacro prowj-test-with-project (files &rest body)
+  "Run BODY in a temporary project root holding FILES.
+FILES is a list of (RELATIVE-PATH . CONTENT).  `prowj-test-root' is
+bound to the root directory."
+  (declare (indent 1))
+  `(let ((prowj-test-root (file-name-as-directory (make-temp-file "prowj-test" t))))
+     (unwind-protect
+       (progn
+         (dolist (file ,files)
+           (let ((path (expand-file-name (car file) prowj-test-root)))
+             (make-directory (file-name-directory path) t)
+             (with-temp-file path (insert (cdr file)))))
+         ,@body)
+       (delete-directory prowj-test-root t))))
+
+(ert-deftest prowj-test-discover-makefile-targets ()
+  (prowj-test-with-project
+    '(("Makefile" . "CUR_DIR := $(shell pwd)\nCFLAGS = -g\n\n.PHONY: all\nall: fetch build\n\nfetch:\n\tgit fetch\n\nbuild test:\n\techo two targets\n\n%.o: %.c\n\tcc -c $<\n\ndeploy: ## ship it\n\techo deploy\n\nbuild:\n\techo repeated\n"))
+    (let ((commands (prowj-discover-makefile prowj-test-root)))
+      (should (equal (mapcar (lambda (entry) (nth 0 entry)) commands)
+                '("make: all" "make: fetch" "make: build" "make: test"
+                   "make: deploy")))
+      (should (equal (nth 1 (car commands)) "make all"))
+      (should (equal (nth 2 (car commands)) prowj-test-root)))))
+
+(ert-deftest prowj-test-discover-makefile-absent ()
+  (prowj-test-with-project '(("README" . "nothing here\n"))
+    (should-not (prowj-discover-makefile prowj-test-root))
+    (should-not (prowj-discover-commands prowj-test-root))))
+
+(ert-deftest prowj-test-discover-npm-scripts ()
+  (prowj-test-with-project
+    '(("package.json" . "{\"scripts\": {\"build\": \"tsc\"}}")
+       ("client/package.json" . "{\"scripts\": {\"dev\": \"vite\", \"test:unit\": \"vitest\"}}")
+       ("node_modules/left-pad/package.json" . "{\"scripts\": {\"evil\": \"rm -rf /\"}}"))
+    (let ((commands (prowj-discover-npm-scripts prowj-test-root)))
+      (should (equal (mapcar (lambda (entry) (nth 0 entry)) commands)
+                '("npm: build" "npm[client]: dev" "npm[client]: test:unit")))
+      (should (equal (nth 1 (nth 1 commands)) "npm run dev"))
+      (should (equal (nth 2 (nth 1 commands))
+                (file-name-as-directory (expand-file-name "client" prowj-test-root))))
+      ;; Nothing from a dependency's own package.json.
+      (should-not (seq-find (lambda (entry) (string-search "evil" (nth 1 entry)))
+                    commands)))))
+
+(ert-deftest prowj-test-discover-broken-package-json ()
+  (prowj-test-with-project
+    '(("package.json" . "{\"scripts\": {\"build\":")
+       ("Makefile" . "build:\n\techo ok\n"))
+    ;; A file being edited is routinely invalid; the rest still lists.
+    (should-not (prowj-discover-npm-scripts prowj-test-root))
+    (should (equal (mapcar (lambda (entry) (nth 0 entry))
+                     (prowj-discover-commands prowj-test-root))
+              '("make: build")))))
+
+(ert-deftest prowj-test-discover-ignore-regexp ()
+  (prowj-test-with-project
+    '(("Makefile" . "build:\n\techo ok\n\ndeploy:\n\techo ship\n\npush-docker:\n\techo push\n"))
+    (should (equal (mapcar (lambda (entry) (nth 0 entry))
+                     (prowj-discover-commands prowj-test-root))
+              '("make: build" "make: deploy" "make: push-docker")))
+    (let ((prowj-discover-ignore-regexp "deploy\\|push-docker"))
+      (should (equal (mapcar (lambda (entry) (nth 0 entry))
+                       (prowj-discover-commands prowj-test-root))
+                '("make: build"))))))
+
+(ert-deftest prowj-test-command-list-puts-configured-first ()
+  (prowj-test-with-project '(("Makefile" . "build:\n\techo ok\n"))
+    (let ((prowj-subcmds (list (list "restart" "make stop && make build" "/tmp/")))
+           (default-directory prowj-test-root))
+      ;; A project root is found through .projectile, which this project has not
+      ;; got, so only the configured entries are left -- and they stay.
+      (should (equal (prowj-command-list) prowj-subcmds)))
+    (with-temp-file (expand-file-name ".projectile" prowj-test-root) (insert ""))
+    (let ((prowj-subcmds (list (list "restart" "make stop && make build" prowj-test-root)))
+           (default-directory prowj-test-root))
+      (should (equal (mapcar (lambda (entry) (nth 0 entry)) (prowj-command-list))
+                '("restart" "make: build"))))))
+
+(ert-deftest prowj-test-discover-respects-functions-list ()
+  (prowj-test-with-project
+    '(("Makefile" . "build:\n\techo ok\n")
+       ("package.json" . "{\"scripts\": {\"dev\": \"vite\"}}"))
+    (let ((prowj-discover-functions '(prowj-discover-npm-scripts)))
+      (should (equal (mapcar (lambda (entry) (nth 0 entry))
+                       (prowj-discover-commands prowj-test-root))
+                '("npm: dev"))))
+    (let ((prowj-discover-functions nil))
+      (should-not (prowj-discover-commands prowj-test-root)))))
