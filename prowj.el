@@ -80,59 +80,53 @@ root has been searched without finding FILENAME."
         "")
       (file-name-directory (directory-file-name project-path)))))
 
+(defun prowj--dot-dir-locals-path ()
+  "Return the path of the project root's .dir-locals.el.
+Signals an error when there is no project root to put it in."
+  (let ((root (prowj-walkup-and-find-project-root)))
+    (unless (file-exists-p root)
+      (error "Couldn't find \".projectile\" file"))
+    (expand-file-name ".dir-locals.el" root)))
+
+(defun prowj--dot-dir-locals-template (root)
+  "Return the .dir-locals.el a project at ROOT starts with."
+  (concat
+    "(\n"
+    "(nil . (\n"
+    (format "(prowj-run-default-dir . \"%s\")\n" root)
+    "(prowj-run-command . \"none\")\n"
+    "(eval . (progn\n"
+    "(setq prowj-subcmds\n"
+    "(list\n"
+    (format "(list \"testcmd1\" \"ls\" \"%s\")))))\n" root)
+    "))\n"
+    ")\n"))
+
 (defun prowj-make-dot-dir-locals-el ()
   "Make a .dir-locals.el file in the project root."
   (interactive)
-  (let ((target-directory)
-         (target-path)
-         (template))
-    (setq target-directory (prowj-walkup-and-find-project-root))
-    (unless (file-exists-p target-directory)
-      (error "Couldn't find \".projectile\" file"))
-    (setq target-path
-      (format "%s%s" target-directory ".dir-locals.el"))
-    (unless (file-exists-p target-path)
-      (setq template
-        (concat
-          "(\n"
-          "(nil . (\n"
-          (format "(prowj-run-default-dir . \"%s\")\n" target-directory)
-          "(prowj-run-command . \"none\")\n"
-          "(eval . (progn\n"
-          "(setq prowj-subcmds\n"
-          "(list\n"
-          (format "(list \"testcmd1\" \"ls\" \"%s\")))))\n" target-directory)
-          "))\n"
-          ")\n"))
-      (write-region template nil target-path))
-    (find-file target-path)))
+  (let ((path (prowj--dot-dir-locals-path)))
+    (unless (file-exists-p path)
+      (write-region (prowj--dot-dir-locals-template
+                      (file-name-directory path))
+        nil path))
+    (find-file path)))
 
 (defun prowj-visit-dot-dir-locals-el ()
   "Visit the .dir-locals.el file in the project root."
   (interactive)
-  (let ((target-directory)
-         (target-path))
-    (setq target-directory (prowj-walkup-and-find-project-root))
-    (unless (file-exists-p target-directory)
-      (error "Couldn't find \".projectile\" file"))
-    (setq target-path
-      (format "%s%s" target-directory ".dir-locals.el"))
-    (find-file target-path)))
+  (find-file (prowj--dot-dir-locals-path)))
 
 (defun prowj-focus-log-window ()
-  "Focus or create a log frame."
+  "Focus the log frame, making one when there is none."
   (interactive)
-  (condition-case nil
-    (select-frame-by-name prowj-log-frame)
-    (error
-      (make-frame `((name . ,prowj-log-frame)))))
-  (select-frame-by-name prowj-log-frame))
+  (select-frame-set-input-focus (prowj--log-frame t)))
 
 (defun prowj-switch-buffer-log-frame ()
   "Switch to another buffer in the log frame."
   (interactive)
   (let ((parent-frame (selected-frame)))
-    (call-interactively 'prowj-focus-log-window)
+    (prowj-focus-log-window)
     (ignore-errors
       (call-interactively 'switch-to-buffer))
     (select-frame-set-input-focus parent-frame)))
@@ -172,14 +166,12 @@ when it does not exist yet."
   "Execute non-interactive CMD in DIRECTORY, optionally in the log frame."
   (prowj-runner-exec-command directory cmd new-frame))
 
-(defun prowj-exec-command-window (directory cmd &optional _after-func)
-  "Execute a command in the current window."
-  (interactive)
+(defun prowj-exec-command-window (directory cmd)
+  "Execute CMD in DIRECTORY, showing its log in the current window."
   (prowj--exec-command directory cmd nil))
 
-(defun prowj-exec-command-frame (directory cmd &optional _after-func)
-  "Execute a command in a new frame."
-  (interactive)
+(defun prowj-exec-command-frame (directory cmd)
+  "Execute CMD in DIRECTORY, showing its log in the log frame."
   (prowj--exec-command directory cmd t))
 
 (defun prowj-reload-dir-locals ()

@@ -616,3 +616,38 @@ bound to the root directory."
             (suffix (nth 2 row)))
       (should (eq (get-text-property (1- (length suffix)) 'face suffix)
                 'prowj-annotation-directory)))))
+
+(ert-deftest prowj-test-dot-dir-locals-path-and-template ()
+  (prowj-test-with-project '((".projectile" . ""))
+    ;; `default-directory' is buffer-local and `find-file' moves to another
+    ;; buffer, so the path is taken once, up front, and used from there.
+    (let* ((default-directory prowj-test-root)
+            (path (prowj--dot-dir-locals-path))
+            (buffer nil))
+      (should (equal path (expand-file-name ".dir-locals.el" prowj-test-root)))
+      (unwind-protect
+        (progn
+          (prowj-make-dot-dir-locals-el)
+          (setq buffer (get-file-buffer path))
+          ;; Made with the project root written into it, and visited.
+          (should buffer)
+          (let ((written (with-current-buffer buffer (buffer-string))))
+            (should (string-search prowj-test-root written))
+            (should (string-search "prowj-subcmds" written))))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
+      ;; A file that is already there is left exactly as it is.
+      (with-temp-file path (insert "(already here)"))
+      (unwind-protect
+        (progn
+          (let ((default-directory prowj-test-root))
+            (prowj-make-dot-dir-locals-el))
+          (setq buffer (get-file-buffer path))
+          (should (equal (with-current-buffer buffer (buffer-string))
+                    "(already here)")))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest prowj-test-dot-dir-locals-without-a-project ()
+  (prowj-test-with-project '(("README" . "no marker here\n"))
+    (let ((default-directory prowj-test-root))
+      ;; The walk up ends at the root without finding `.projectile'.
+      (should-error (prowj--dot-dir-locals-path)))))
