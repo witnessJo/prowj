@@ -586,3 +586,33 @@ bound to the root directory."
     (let ((prowj-discover-functions '(ignore)))
       ;; A function with no group of its own is listed under its name.
       (should-not (prowj--discover-entries prowj-test-root)))))
+
+(ert-deftest prowj-test-completion-table-marks-the-directory ()
+  (let* ((root "/tmp/project/")
+          (entries (list (list "Project" "here" "make build" root)
+                     (list "npm" "there" "npm run dev" "/tmp/project/client/")))
+          (table (prowj--command-alist entries root))
+          (suffixes
+            (lambda ()
+              (mapcar (lambda (row) (substring-no-properties (nth 2 row)))
+                (funcall (cdr (assq 'affixation-function
+                                (cdr (funcall (prowj--completion-table table root)
+                                       "" nil 'metadata))))
+                  (mapcar #'car table))))))
+    (let ((rows (funcall suffixes)))
+      ;; The root carries no marker, since it has no directory to show.
+      (should-not (string-match-p "▸" (nth 0 rows)))
+      (should (string-match-p "▸ client\\'" (nth 1 rows))))
+    (let ((prowj-annotation-directory-prefix "@ "))
+      (should (string-match-p "@ client\\'" (nth 1 (funcall suffixes)))))
+    (let ((prowj-annotation-directory-prefix ""))
+      ;; Only the column separator is left in front of the directory.
+      (should (string-suffix-p "  client" (nth 1 (funcall suffixes)))))
+    ;; The directory is the only part wearing its own face.
+    (let* ((row (nth 1 (funcall (cdr (assq 'affixation-function
+                                       (cdr (funcall (prowj--completion-table table root)
+                                              "" nil 'metadata))))
+                         (mapcar #'car table))))
+            (suffix (nth 2 row)))
+      (should (eq (get-text-property (1- (length suffix)) 'face suffix)
+                'prowj-annotation-directory)))))

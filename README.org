@@ -79,11 +79,11 @@ one's command and directory beside its label:
 
 : ── Project ──
 :   restart        make stop && make build && make restart
-:   client build   npm run build                            wc-clients
+:   client build   npm run build                          ▸ wc-clients
 : ── Makefile ──
 :   make: build    make build
 : ── npm ──
-:   npm[wc-clients]: dev   npm run dev                      wc-clients
+:   npm[wc-clients]: dev   npm run dev                    ▸ wc-clients
 
 The label alone is the candidate, so typing narrows the list by the name
 and never by the command or the path behind it, and the order is kept as
@@ -93,9 +93,14 @@ A completion UI that renders =affixation-function= and =group-function=,
 such as Vertico, draws the columns and the group headings; plain
 =completing-read= lists the labels.
 
-=prowj-annotation-command-width= caps the command column, and the faces
-=prowj-annotation-command= and =prowj-annotation-directory= colour the
-two annotations.  The completion category is =prowj-command=.
+=prowj-annotation-command-width= caps the command column and
+=prowj-annotation-directory-prefix= is the marker in front of a
+directory, ="▸ "= by default and =""= for none.  The command is dimmed
+through =prowj-annotation-command=, which follows
+=completions-annotations=, and the directory is coloured through
+=prowj-annotation-directory=, which follows =font-lock-constant-face= --
+it is the column saying a command runs somewhere else, which is worth
+seeing at a glance.  The completion category is =prowj-command=.
 
 Commands run asynchronously through =start-file-process-shell-command= with
 a pipe, in a =special-mode= derived log buffer.  TRAMP directories are

@@ -396,8 +396,18 @@ task file holds -- so they lead, and what the task files declare follows."
   "Face for the shell command shown beside a label in the command list."
   :group 'prowj)
 
-(defface prowj-annotation-directory '((t :inherit (shadow completions-annotations)))
-  "Face for the directory shown beside a label in the command list."
+(defface prowj-annotation-directory '((t :inherit font-lock-constant-face))
+  "Face for the directory shown beside a label in the command list.
+Coloured rather than dimmed: it is the column that says a command does
+not run where the others do, and that is worth seeing at a glance."
+  :group 'prowj)
+
+(defcustom prowj-annotation-directory-prefix "▸ "
+  "Marker put in front of the directory in the command list.
+It gives the few commands that run outside the project root something to
+catch the eye.  Use \"\" for none, or a plain \"@ \" where the font has
+no arrow."
+  :type 'string
   :group 'prowj)
 
 (defcustom prowj-annotation-command-width 48
@@ -487,13 +497,16 @@ under it."
                                   command command-width nil ?\s t)
                                 'face 'prowj-annotation-command)
                               "  "
-                              (propertize
-                                ;; The root is where nearly everything runs,
-                                ;; so the column speaks only for the rest.
-                                (let ((shown (prowj--display-directory
-                                               directory root)))
-                                  (if (equal shown ".") "" shown))
-                                'face 'prowj-annotation-directory)))))
+                              ;; The root is where nearly everything runs, so
+                              ;; the column speaks only for the rest.
+                              (let ((shown (prowj--display-directory
+                                             directory root)))
+                                (if (equal shown ".")
+                                  ""
+                                  (propertize
+                                    (concat prowj-annotation-directory-prefix
+                                      shown)
+                                    'face 'prowj-annotation-directory)))))))
                       candidates)))))
         (t (complete-with-action action table string predicate))))))
 
