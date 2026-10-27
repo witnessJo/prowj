@@ -743,3 +743,12 @@ bound to the root directory."
       (insert "[project]\ndependencies = ['pytest>=8', 'ruff']\n"))
     (should (equal (mapcar #'cadr (prowj-discover-uv prowj-test-root))
                    '("uv sync" "uv run -- pytest" "uv run -- ruff check ." "uv run -- ruff format .")))))
+
+(ert-deftest prowj-test-gradle-executable-wrapper ()
+  (prowj-test-with-project
+      '(("build.gradle" . "")
+        ("gradlew" . "#!/bin/sh\nprintf 'Build tasks\\n-----------\\nbuild - Build\\n'\n"))
+    (set-file-modes (expand-file-name "gradlew" prowj-test-root) #o755)
+    (let ((prowj-discover--gradle-cache (make-hash-table :test #'equal)))
+      (should (equal (cadar (prowj-discover-gradle prowj-test-root))
+                     "./gradlew build")))))

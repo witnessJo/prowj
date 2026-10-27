@@ -367,7 +367,13 @@ reason to fail the command list."
           (setq process
                 (make-process
                  :name "prowj-gradle-tasks" :buffer buffer
-                 :command (append launcher '("--console=plain" "--quiet" "tasks" "--all"))
+                 ;; Emacs resolves relative program names through exec-path.
+                 :command (append
+                           (cons (if (string-prefix-p "./" (car launcher))
+                                     (expand-file-name (car launcher) root)
+                                   (car launcher))
+                                 (cdr launcher))
+                           '("--console=plain" "--quiet" "tasks" "--all"))
                  :connection-type 'pipe :noquery t :sentinel #'ignore))
           (let ((deadline (+ (float-time) prowj-discover-gradle-timeout)))
             (while (and (process-live-p process) (< (float-time) deadline))
