@@ -200,7 +200,8 @@ when it does not exist yet."
 ;;; Commands declared by the project's own task files
 
 (defcustom prowj-discover-functions
-  '(prowj-discover-makefile prowj-discover-npm-scripts)
+  '(prowj-discover-makefile prowj-discover-npm-scripts prowj-discover-gradle
+     prowj-discover-uv)
   "Functions that read a project's commands out of its task files.
 Each is called with the project root directory and returns a list of
 \(LABEL COMMAND DIRECTORY) entries, the shape `prowj-subcmds' uses."
@@ -322,11 +323,133 @@ reason to fail the command list."
             entries))))
     (nreverse entries)))
 
+(defcustom prowj-discover-gradle-timeout 30
+  "Seconds to wait for Gradle task discovery before stopping it."
+  :type 'natnum
+  :group 'prowj)
+
+(defvar prowj-discover--gradle-cache (make-hash-table :test #'equal)
+  "Successful Gradle task lists, keyed by project root and launcher.")
+
+(defun prowj-discover--gradle-command (root)
+  "Return the Gradle launcher argument list for ROOT, or nil."
+  (let ((default-directory root))
+    (cond
+      ((file-readable-p (expand-file-name "gradlew" root))
+       (if (file-executable-p (expand-file-name "gradlew" root))
+           '("./gradlew")
+         '("sh" "./gradlew")))
+      ((executable-find "gradle") '("gradle")))))
+
+(defun prowj-discover--gradle-tasks (output)
+  "Read task names from Gradle's plain text task report OUTPUT."
+  (let ((lines (split-string output "\n")) active tasks)
+    (while lines
+      (let ((line (string-trim-right (pop lines))))
+        (cond
+          ((and (string-match-p "tasks\\'" line)
+                (string-match-p "\\`-+\\'" (or (car lines) "")))
+           (pop lines)
+           (setq active t))
+          ((string-empty-p line) (setq active nil))
+          ((and active
+                (string-match
+                 "\\`\\([[:alnum:]_:.$-]+\\)\\(?: - .*\\)?\\'" line))
+           (push (match-string 1 line) tasks)))))
+    (delete-dups (nreverse tasks))))
+
+(defun prowj-discover--gradle-output (root launcher)
+  "Run LAUNCHER's task report in ROOT, with a bounded wait."
+  (let ((default-directory root)
+        (buffer (generate-new-buffer " *prowj-gradle-tasks*")) process)
+    (unwind-protect
+        (progn
+          (setq process
+                (make-process
+                 :name "prowj-gradle-tasks" :buffer buffer
+                 :command (append launcher '("--console=plain" "--quiet" "tasks" "--all"))
+                 :connection-type 'pipe :noquery t :sentinel #'ignore))
+          (let ((deadline (+ (float-time) prowj-discover-gradle-timeout)))
+            (while (and (process-live-p process) (< (float-time) deadline))
+              (accept-process-output process 0.1)))
+          (if (and (eq (process-status process) 'exit)
+                   (zerop (process-exit-status process)))
+              (with-current-buffer buffer (buffer-string))
+            (message "Prowj: Gradle discovery failed or timed out; run Gradle tasks in a terminal and retry")
+            nil))
+      (when (and process (process-live-p process)) (delete-process process))
+      (kill-buffer buffer))))
+
+(defun prowj-discover-gradle (root)
+  "Return Gradle tasks in local ROOT, preferring its wrapper.
+Successful reports are cached until `prowj-gradle-refresh-tasks' is used.
+Querying tasks evaluates the project's build scripts."
+  (when (and (not (file-remote-p root))
+             (seq-some (lambda (file) (file-readable-p (expand-file-name file root)))
+                       '("build.gradle" "build.gradle.kts"
+                         "settings.gradle" "settings.gradle.kts")))
+    (when-let* ((launcher (prowj-discover--gradle-command root)))
+      (let* ((key (cons (file-truename root) launcher))
+             (cached (gethash key prowj-discover--gradle-cache 'missing)))
+        (when (eq cached 'missing)
+          (setq cached nil)
+          (when-let* ((output (prowj-discover--gradle-output root launcher)))
+            (setq cached
+                  (mapcar
+                   (lambda (task)
+                     (list (format "gradle: %s" task)
+                           (mapconcat #'shell-quote-argument
+                                      (append launcher (list task)) " ") root))
+                   (prowj-discover--gradle-tasks output)))
+            (puthash key cached prowj-discover--gradle-cache)))
+        cached))))
+
+;;;###autoload
+(defun prowj-gradle-refresh-tasks ()
+  "Clear cached Gradle tasks and reopen the current project's command list."
+  (interactive)
+  (clrhash prowj-discover--gradle-cache)
+  (prowj-subcmd-list))
+
+(defcustom prowj-discover-uv-python "python3"
+  "Python 3.11+ executable used to read pyproject.toml with tomllib.
+Discovery never invokes uv or installs dependencies."
+  :type 'string
+  :group 'prowj)
+
+(defconst prowj-discover--uv-helper
+  (expand-file-name "prowj-uv.py"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "Path to the bundled TOML reader.")
+
+(defun prowj-discover-uv (root)
+  "Return uv commands declared by the local ROOT's pyproject.toml.
+Dependency groups and extras are explicitly enabled for pytest and Ruff.
+Invalid TOML or unavailable Python/uv leaves other discovery unaffected."
+  (let ((file (expand-file-name "pyproject.toml" root))
+        (default-directory root))
+    (when (and (not (file-remote-p root)) (file-readable-p file)
+               (executable-find "uv")
+               (executable-find prowj-discover-uv-python))
+      (condition-case nil
+          (with-temp-buffer
+            (when (zerop (call-process prowj-discover-uv-python nil (list t nil) nil
+                                      "-I" prowj-discover--uv-helper file))
+              (goto-char (point-min))
+              (mapcar (lambda (entry)
+                        (list (car entry)
+                              (mapconcat #'shell-quote-argument (cadr entry) " ")
+                              root))
+                      (json-parse-buffer :array-type 'list))))
+        (error nil)))))
+
 (defconst prowj-configured-group "Project"
   "The group the entries in `prowj-subcmds' are listed under.")
 
 (put 'prowj-discover-makefile 'prowj-discover-group "Makefile")
 (put 'prowj-discover-npm-scripts 'prowj-discover-group "npm")
+(put 'prowj-discover-gradle 'prowj-discover-group "Gradle")
+(put 'prowj-discover-uv 'prowj-discover-group "uv")
 
 (defun prowj--project-root ()
   "Return the project root directory, or nil when there is no project."

@@ -51,6 +51,8 @@ bindings again; running commands continue unaffected.
 The command list also holds what the project's own task files declare, so
 a target does not have to be written out a second time:
 
+- uv project scripts, pytest/Ruff commands for declared dependencies, and =uv sync=
+- Gradle tasks, as =gradle: build= or =gradle: app:test=
 - makefile targets, as =make: build=
 - =package.json= scripts, as =npm: build=, or =npm[wc-clients]: dev= for a
   =package.json= in a subdirectory
@@ -71,6 +73,47 @@ Discovery offers every target it finds, which means =deploy= and
 configured entries alone -- =prowj-discover-npm-depth= how far below the
 root =package.json= is looked for, and =prowj-discover-skip-directories=
 which directories are left alone (=node_modules= among them).
+
+*** uv
+
+Local roots with a valid =pyproject.toml= and =uv= on PATH get a =uv= group:
+
+- =[project.scripts]= entries become =uv run -- <name>=.
+- An explicit =pytest= dependency adds a test command.
+- An explicit =ruff= dependency adds check and format commands.
+- =uv sync= synchronizes the project environment.
+
+Discovery reads regular dependencies, =[dependency-groups]= (including
+=include-group= references), optional dependencies, and legacy
+=tool.uv.dev-dependencies=. Tool commands include =--group <name>= or
+=--extra <name>= when necessary, so non-default dependencies are available.
+A Ruff/pytest configuration table alone does not enable a command.
+Project scripts require the project to be installable by uv (normally via
+=[build-system]=). Projects with =tool.uv.managed = false= are excluded.
+
+A bundled reader uses Python 3.11+ =tomllib=; set
+=prowj-discover-uv-python= if =python3= is not the desired interpreter.
+Opening the menu only reads TOML: it does not run uv, import project code,
+download packages, or create an environment. Changes are reflected on the
+next opening. Invalid TOML, missing tools, and remote roots are skipped.
+Discovery currently reads the project root, not workspace member files.
+
+*** Gradle
+
+For local project roots containing =build.gradle[.kts]= or
+=settings.gradle[.kts]=, Prowj queries =tasks --all --console=plain --quiet=.
+It prefers =./gradlew= (or =sh ./gradlew= without execute permission),
+falling back to =gradle= on PATH when there is no wrapper. Plugin tasks and
+subproject task paths come from Gradle itself, rather than source parsing.
+The chosen task runs through the normal Prowj log runner.
+
+The first query evaluates build scripts and may download the wrapper or
+plugins. Successful reports are cached for the Emacs session. After changing
+build scripts or plugins, use =M-x prowj-gradle-refresh-tasks= to clear the
+cache and reopen the list. Failed reports are retried on the next opening.
+=prowj-discover-gradle-timeout= limits discovery to 30 seconds by default;
+if a first download takes longer, run =./gradlew tasks --all= in a terminal
+first, or increase that setting. TRAMP Gradle discovery is not supported.
 
 ** Choosing a command
 
