@@ -149,7 +149,11 @@ Commands run asynchronously through =start-file-process-shell-command= with
 a pipe, in a =special-mode= derived log buffer.  TRAMP directories are
 handled by Emacs file handlers.  No compilation parser or terminal emulator
 is involved.
-Use a terminal for input prompts and full-screen applications.  The legacy
+Type directly in the log buffer and press Enter to send one line to standard
+input; empty Enter sends a blank line.  Backspace deletes pending input,
+=C-u= clears it, and =C-y= pastes a single line.  Pending input is kept
+separate from output and is not written to the archived log.
+Use a terminal for TTY-dependent prompts and full-screen applications.  The legacy
 =prowj-use-pty= variable is obsolete and no longer controls execution.
 
 ** Readable, bounded logs
@@ -160,8 +164,9 @@ Use a terminal for input prompts and full-screen applications.  The legacy
   the original line in the complete log file.
 - The preview buffer keeps a bounded recent tail.  Complete ANSI-free text
   logs are saved locally, including runs on remote hosts.
-- =C-c C-l= opens the complete log, =g= repeats the command, and =C-c C-k=
-  interrupts it.  The mode line reports Running, Finished, Failed or Stopped.
+- =C-c C-l= opens the complete log, =C-c C-r= repeats the command, and
+  =C-c C-c= (or =C-c C-k=) interrupts it.  =C-c C-o= visits source
+  at point; =C-c C-i= optionally reads input in the minibuffer.  The mode line reports Running, Finished, Failed or Stopped.
 - Click =file:line[:column]= or Python traceback locations to visit source.
   =next-error= navigates these links in the retained preview.  Full compiler
   diagnostic parsing and =recompile= are not used.

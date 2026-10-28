@@ -24,12 +24,12 @@
 (require 'prowj-runner)
 
 (defcustom prowj-use-pty t
-  "Legacy setting, ignored by the non-interactive project runner."
+  "Legacy setting, ignored by the pipe-based project runner."
   :type 'boolean
   :group 'prowj)
 
 (make-obsolete-variable 'prowj-use-pty
-                        "Runs now use a pipe; use a terminal for interactive commands."
+                        "Runs use a pipe with line input; use a terminal for TTY-dependent commands."
                         "0.2.0")
 
 (defcustom prowj-exec-command-frame-enable nil

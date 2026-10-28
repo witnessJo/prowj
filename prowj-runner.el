@@ -187,12 +187,96 @@ Older logs are deleted when a run starts, however few
                             (t "Log"))
                       (when active (concat " / " active)))))))
 
+(defvar-local prowj-runner-input "")
+(defvar-local prowj-runner-input-overlay nil)
+
+(defun prowj-runner-remove-input-overlay ()
+  "Remove the pending-input display when changing modes or rerunning."
+  (when (overlayp prowj-runner-input-overlay)
+    (delete-overlay prowj-runner-input-overlay)
+    (setq prowj-runner-input-overlay nil)))
+
+(defun prowj-runner-input-process ()
+  "Return the live process for the current log buffer."
+  (let ((process (get-buffer-process (current-buffer))))
+    (unless (and process (process-live-p process))
+      (user-error "No running process in this buffer"))
+    process))
+
+(defun prowj-runner-refresh-input (&rest _)
+  "Display pending input after the output without modifying the log."
+  (when (derived-mode-p 'prowj-run-mode)
+    (unless (overlayp prowj-runner-input-overlay)
+      (setq prowj-runner-input-overlay (make-overlay (point-max) (point-max))))
+    (move-overlay prowj-runner-input-overlay (point-max) (point-max))
+    (overlay-put prowj-runner-input-overlay 'after-string
+                 (unless (string-empty-p prowj-runner-input)
+                   (concat (propertize prowj-runner-input 'face 'font-lock-string-face)
+                           (propertize " " 'cursor t))))))
+
+(defun prowj-runner-insert-input (count)
+  "Append COUNT copies of the typed character to pending process input."
+  (interactive "p")
+  (prowj-runner-input-process)
+  (unless (characterp last-command-event)
+    (user-error "Use printable characters to enter process input"))
+  (setq prowj-runner-input
+        (concat prowj-runner-input (make-string count last-command-event)))
+  (goto-char (point-max))
+  (prowj-runner-refresh-input))
+
+(defun prowj-runner-delete-input ()
+  "Delete the last pending input character without editing output."
+  (interactive)
+  (unless (string-empty-p prowj-runner-input)
+    (setq prowj-runner-input (substring prowj-runner-input 0 -1)))
+  (goto-char (point-max))
+  (prowj-runner-refresh-input))
+
+(defun prowj-runner-clear-input ()
+  "Discard pending input."
+  (interactive)
+  (setq prowj-runner-input "")
+  (prowj-runner-refresh-input))
+
+(defun prowj-runner-yank-input ()
+  "Append a single line from the kill ring to pending input."
+  (interactive)
+  (prowj-runner-input-process)
+  (let ((text (current-kill 0)))
+    (when (string-match-p "[\n\r]" text)
+      (user-error "Paste a single line, then press Enter to send it"))
+    (setq prowj-runner-input (concat prowj-runner-input text)))
+  (goto-char (point-max))
+  (prowj-runner-refresh-input))
+
+(defun prowj-runner-submit-input ()
+  "Send pending input followed by a newline, allowing an empty line."
+  (interactive)
+  (process-send-string (prowj-runner-input-process) (concat prowj-runner-input "\n"))
+  (prowj-runner-clear-input)
+  (goto-char (point-max)))
+
+(defun prowj-runner-send-input ()
+  "Read one line and send it to the current project command's standard input.
+An empty line is allowed.  Input is not added to the log or input history."
+  (interactive)
+  (let ((process (get-buffer-process (current-buffer))))
+    (unless (and process (process-live-p process))
+      (user-error "No running process in this buffer"))
+    (let ((input (read-string "Process input (Enter sends an empty line): " nil t)))
+      (unless (process-live-p process)
+        (user-error "The process exited before input could be sent"))
+      (process-send-string process (concat input "\n")))))
+
 (define-derived-mode prowj-run-mode special-mode "Prowj"
-  "Read-only project command output, independent of compilation-mode."
+  "Read-only project output with direct line input to the running command."
   (setq-local mode-line-process
               '(:eval (prowj-runner-mode-line))
               next-error-function #'prowj-runner-next-error)
-  (prowj-runner-setup-buffer))
+  (prowj-runner-setup-buffer)
+  (add-hook 'change-major-mode-hook #'prowj-runner-remove-input-overlay nil t)
+  (prowj-runner-clear-input))
 
 (defun prowj-runner-setup-buffer ()
   "Configure bounded project command output."
@@ -218,9 +302,22 @@ Older logs are deleted when a run starts, however few
                                 (or prowj-runner-log-file "starting…"))))))
 
 (define-key prowj-run-mode-map (kbd "C-c C-l") #'prowj-runner-open-full-log)
-(define-key prowj-run-mode-map (kbd "g") #'prowj-runner-rerun)
+;; Printable characters are process input, never log edits or commands.
+(dotimes (index 95)
+  (define-key prowj-run-mode-map (vector (+ 32 index)) #'prowj-runner-insert-input))
+(define-key prowj-run-mode-map [remap self-insert-command] #'prowj-runner-insert-input)
+(define-key prowj-run-mode-map [remap undefined] #'prowj-runner-insert-input)
+(define-key prowj-run-mode-map (kbd "RET") #'prowj-runner-submit-input)
+(define-key prowj-run-mode-map (kbd "<return>") #'prowj-runner-submit-input)
+(define-key prowj-run-mode-map (kbd "DEL") #'prowj-runner-delete-input)
+(define-key prowj-run-mode-map (kbd "<backspace>") #'prowj-runner-delete-input)
+(define-key prowj-run-mode-map (kbd "C-u") #'prowj-runner-clear-input)
+(define-key prowj-run-mode-map (kbd "C-y") #'prowj-runner-yank-input)
+(define-key prowj-run-mode-map (kbd "C-c C-i") #'prowj-runner-send-input)
+(define-key prowj-run-mode-map (kbd "C-c C-r") #'prowj-runner-rerun)
 (define-key prowj-run-mode-map (kbd "C-c C-k") #'prowj-runner-stop)
-(define-key prowj-run-mode-map (kbd "C-c C-c") #'prowj-runner-visit-source)
+(define-key prowj-run-mode-map (kbd "C-c C-c") #'prowj-runner-stop)
+(define-key prowj-run-mode-map (kbd "C-c C-o") #'prowj-runner-visit-source)
 ;; Output is read-only, so TAB has nothing to indent: move between links.
 (define-key prowj-run-mode-map (kbd "TAB") #'forward-button)
 (define-key prowj-run-mode-map (kbd "<backtab>") #'backward-button)
@@ -236,7 +333,8 @@ Older logs are deleted when a run starts, however few
   (interactive)
   (let ((process (get-buffer-process (current-buffer))))
     (unless (and process (process-live-p process)) (user-error "No running command"))
-    (interrupt-process process)))
+    (interrupt-process process)
+    (prowj-runner-clear-input)))
 
 (defun prowj-runner-open-source (button)
   "Open the source location stored on BUTTON."
@@ -339,7 +437,8 @@ Only the bounded preview is scanned; no filesystem access is performed here."
           (prowj-runner-link-sources fresh (point-max)))))
     (prowj-runner-trim-output)
     (when following (goto-char (point-max)))
-    (dolist (window windows) (set-window-point window (point-max)))))
+    (dolist (window windows) (set-window-point window (point-max)))
+    (prowj-runner-refresh-input)))
 
 
 (defun prowj-runner-open-full-log ()
@@ -520,8 +619,8 @@ listing or a completion prompt would stumble over."
     (prowj-runner-refresh-project (process-get process 'prowj-runner-project))))
 
 (defun prowj-runner-exec-command (directory command &optional new-frame)
-  "Run non-interactive COMMAND in DIRECTORY with bounded project logs.
-Use a terminal for commands requiring terminal input or full-screen interfaces."
+  "Run COMMAND in DIRECTORY with bounded logs and line-based standard input.
+Use a terminal for commands requiring a TTY or full-screen interfaces."
   (unless (file-directory-p directory)
     (user-error "Directory not found: %s" directory))
   (when (or (null command) (string-empty-p command))
