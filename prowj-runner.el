@@ -563,6 +563,11 @@ Only the bounded preview is scanned; no filesystem access is performed here."
           ;; OSC alone, so a command that sets the terminal title would show
           ;; the escape itself.  The look-back covers one split across chunks.
           (ansi-osc-apply-on-region fresh (point-max))
+          ;; A BEL left over is a terminal bell, such as readline's when there
+          ;; is nothing to erase.  Terminals ring it rather than show it.
+          (goto-char fresh)
+          (while (search-forward "\a" nil t)
+            (delete-char -1))
           (prowj-runner-link-sources fresh (point-max)))))
     (prowj-runner-trim-output)
     (when following (goto-char (point-max)))

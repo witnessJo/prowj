@@ -864,3 +864,11 @@ bound to the root directory."
               (prowj-runner-eof-input)
               (should (wait-for (lambda () (string-search "eof" (buffer-string))))))
           (delete-process process))))))
+
+(ert-deftest prowj-runner-test-bell-is-not-shown ()
+  (with-temp-buffer
+    (prowj-run-mode)
+    (prowj-runner-insert-output "질문> \a\a")
+    (prowj-runner-insert-output "\e]0;ti")
+    (prowj-runner-insert-output "tle\a\ax")
+    (should (equal (buffer-string) "질문> x"))))
