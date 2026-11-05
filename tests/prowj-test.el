@@ -829,10 +829,7 @@ bound to the root directory."
                              (shell-quote-argument
                               "import time\ntime.sleep(0.5)\nwhile True:\n  try: print('got', repr(input('> ')))\n  except EOFError: print('eof'); break")))))
       (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
-      (set-process-filter process
-                          (lambda (process text)
-                            (with-current-buffer (process-buffer process)
-                              (prowj-runner-insert-output (ansi-color-apply text)))))
+      (set-process-filter process #'prowj-runner-filter)
       (cl-flet ((wait-for (predicate)
                   (let ((deadline (+ (float-time) 5)))
                     (while (and (< (float-time) deadline) (not (funcall predicate)))
@@ -872,3 +869,94 @@ bound to the root directory."
     (prowj-runner-insert-output "\e]0;ti")
     (prowj-runner-insert-output "tle\a\ax")
     (should (equal (buffer-string) "질문> x"))))
+
+(defun prowj-test-terminal-line ()
+  "Return the last line and the cursor's offset into it."
+  (let ((start (prowj-runner-terminal-line-start)))
+    (cons (buffer-substring-no-properties start (point-max))
+          (- (prowj-runner-terminal-point) start))))
+
+(ert-deftest prowj-runner-test-terminal-cursor-on-last-line ()
+  (with-temp-buffer
+    (prowj-run-mode)
+    (prowj-runner-terminal-output "first\n질문> hello")
+    (should (equal (prowj-test-terminal-line) '("질문> hello" . 9)))
+    ;; Readline's C-a: back over the input by columns, then insert there.
+    (prowj-runner-terminal-output "\b\b\b\b\b")
+    (should (equal (prowj-test-terminal-line) '("질문> hello" . 4)))
+    (prowj-runner-terminal-output "\e[@X")
+    (should (equal (prowj-test-terminal-line) '("질문> Xhello" . 5)))
+    ;; Delete a character at the cursor; a split CSI waits for its end.
+    (prowj-runner-terminal-output "\b\e[")
+    (prowj-runner-terminal-output "P")
+    (should (equal (prowj-test-terminal-line) '("질문> hello" . 4)))
+    ;; Redraw from the line start, erasing what is left over.
+    (prowj-runner-terminal-output "\r질문> ok\e[K")
+    (should (equal (prowj-test-terminal-line) '("질문> ok" . 6)))
+    (prowj-runner-terminal-output "\e[2D\e[1C")
+    (should (equal (prowj-test-terminal-line) '("질문> ok" . 5)))
+    ;; A newline keeps the line whole wherever the cursor is.
+    ;; Erasing by columns leaves blanks; colors still apply.
+    (prowj-runner-terminal-output "\n\e[31mred\e[0m한\b\b  \b\b")
+    (should (equal (prowj-test-terminal-line) '("red  " . 3)))
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "first\n질문> ok\nred  "))
+    (should (get-text-property (prowj-runner-terminal-line-start) 'font-lock-face))
+    ;; A bell is dropped and a title sequence leaves nothing behind.
+    (prowj-runner-terminal-output "\a\e]0;title\ax")
+    (should (equal (prowj-test-terminal-line) '("redx " . 4)))))
+
+(ert-deftest prowj-runner-test-readline-cursor-through-pty ()
+  (skip-unless (and (file-directory-p "/proc/self/task")
+                    (executable-find "python3") (executable-find "stty")
+                    (zerop (call-process "python3" nil nil nil "-c" "import readline"))))
+  (with-temp-buffer
+    (prowj-run-mode)
+    (setq default-directory temporary-file-directory)
+    (let* ((process-connection-type t)
+           (process-environment (cons "TERM=xterm-256color" process-environment))
+           (process (start-process-shell-command
+                     "prowj-readline-test" (current-buffer)
+                     (format "stty %s cols 80 rows 24 2>/dev/null; python3 -c %s"
+                             prowj-runner-stty-settings
+                             (shell-quote-argument
+                              "import readline\nwhile True:\n  try: print('got', repr(input('> ')))\n  except EOFError: print('eof'); break")))))
+      (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
+      (set-process-filter process #'prowj-runner-filter)
+      (cl-flet ((wait-for (predicate)
+                  (let ((deadline (+ (float-time) 5)))
+                    (while (and (< (float-time) deadline) (not (funcall predicate)))
+                      (accept-process-output process 0.05)))
+                  (funcall predicate))
+                (type (string)
+                  (dolist (character (string-to-list string))
+                    (let ((last-command-event character)) (prowj-runner-insert-input 1))))
+                (press (key)
+                  (let ((last-command-event (aref (kbd key) 0)))
+                    (prowj-runner-terminal-motion))))
+        (unwind-protect
+            (progn
+              (should (wait-for (lambda () (prowj-runner-process-reading-p process))))
+              (should (prowj-runner-terminal-raw-p process))
+              (type "world")
+              (should (wait-for (lambda () (equal (prowj-test-terminal-line) '("> world" . 7)))))
+              (press "C-a")
+              (should (wait-for (lambda () (equal (prowj-test-terminal-line) '("> world" . 2)))))
+              (type "hello ")
+              (should (wait-for (lambda () (equal (prowj-test-terminal-line) '("> hello world" . 8)))))
+              (press "C-e")
+              (should (wait-for (lambda () (equal (cdr (prowj-test-terminal-line)) 13))))
+              (prowj-runner-submit-input)
+              (should (wait-for (lambda () (string-search "got 'hello world'" (buffer-string)))))
+              (should (wait-for (lambda () (equal (prowj-test-terminal-line) '("> " . 2)))))
+              ;; History is readline's too.
+              (press "<up>")
+              (should (wait-for (lambda () (equal (car (prowj-test-terminal-line)) "> hello world"))))
+              ;; Out of insert state the key is Emacs's again.
+              (let ((ran nil))
+                (cl-progv '(meow-mode meow-insert-mode) '(t nil)
+                  (cl-letf (((symbol-function 'prowj-runner-global-command)
+                             (lambda (_keys) (setq ran t))))
+                    (press "C-a")))
+                (should ran)))
+          (delete-process process))))))

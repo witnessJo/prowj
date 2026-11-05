@@ -81,6 +81,10 @@ comint edits lines itself; a run buffer leaves editing to the terminal.")
 (defvar-local prowj-runner-line-column 0)
 (defvar-local prowj-runner-line-elided nil)
 (defvar-local prowj-runner-output-line 1)
+(defvar-local prowj-runner-terminal-column 0
+  "Column of a pty run's terminal cursor on the last line.")
+(defvar-local prowj-runner-terminal-pending ""
+  "Start of an escape sequence held back until the rest arrives.")
 
 (declare-function prowj-focus-log-window "prowj")
 (declare-function prowj-reload-dir-locals "prowj")
@@ -241,9 +245,9 @@ comint edits lines itself; a run buffer leaves editing to the terminal.")
     process))
 
 (defun prowj-runner-send-terminal (process string)
-  "Send STRING to the terminal of PROCESS and follow the end of the output."
+  "Send STRING to the terminal of PROCESS and follow its cursor."
   (process-send-string process string)
-  (goto-char (point-max)))
+  (goto-char (prowj-runner-terminal-point)))
 
 (defun prowj-runner-read-proc (pid file)
   "Return the contents of /proc/PID/FILE, or nil when it cannot be read."
@@ -361,12 +365,38 @@ A pty run receives it as a terminal paste; a pipe run takes one line."
       (prowj-runner-clear-input)
       (goto-char (point-max)))))
 
+(defun prowj-runner-insert-state-p ()
+  "Return non-nil unless a modal editing state keeps keys for Emacs.
+Meow's normal and motion states browse the output; its insert state,
+and buffers without Meow, type into the terminal."
+  (not (and (bound-and-true-p meow-mode)
+            (not (bound-and-true-p meow-insert-mode)))))
+
+(defun prowj-runner-terminal-key-process ()
+  "Return the pty process that should receive a key Emacs also uses.
+That is while typing (see `prowj-runner-insert-state-p') and while one
+of the command's processes reads its terminal; nil otherwise."
+  (when-let* (((prowj-runner-insert-state-p))
+              (process (prowj-runner-pty-process))
+              ((prowj-runner-process-reading-p process)))
+    process))
+
+(defun prowj-runner-terminal-raw-p (process)
+  "Return non-nil when the terminal of PROCESS is out of canonical mode.
+A program such as readline then edits the line itself and moves its
+cursor; in canonical mode the terminal has no cursor motion to offer."
+  (when-let* ((tty (process-tty-name process))
+              ((not (file-remote-p default-directory))))
+    (with-temp-buffer
+      (and (eq 0 (ignore-errors (call-process "stty" nil t nil "-F" tty "-a")))
+           (progn (goto-char (point-min))
+                  (re-search-forward "\\(?:^\\|[ \t]\\)-icanon\\_>" nil t))))))
+
 (defun prowj-runner-delete-word-input ()
   "Erase the last word typed while the command reads its terminal.
 Otherwise, and in pipe runs, run the key's global command."
   (interactive)
-  (if-let* ((process (prowj-runner-pty-process))
-            ((prowj-runner-process-reading-p process)))
+  (if-let* ((process (prowj-runner-terminal-key-process)))
       (prowj-runner-send-terminal process "\C-w")
     (prowj-runner-global-command (this-command-keys-vector))))
 
@@ -375,10 +405,31 @@ Otherwise, and in pipe runs, run the key's global command."
 On an empty line the command reads end of file.  Otherwise, and in pipe
 runs, run the key's global command."
   (interactive)
-  (if-let* ((process (prowj-runner-pty-process))
-            ((prowj-runner-process-reading-p process)))
+  (if-let* ((process (prowj-runner-terminal-key-process)))
       (prowj-runner-send-terminal process "\C-d")
     (prowj-runner-global-command (this-command-keys-vector))))
+
+(defconst prowj-runner-terminal-motion-keys
+  '(("C-a" . "\C-a") ("C-e" . "\C-e") ("C-b" . "\C-b") ("C-f" . "\C-f")
+    ("<left>" . "\e[D") ("<right>" . "\e[C") ("<up>" . "\e[A") ("<down>" . "\e[B")
+    ("<home>" . "\e[H") ("<end>" . "\e[F"))
+  "Keys moving a line editor's cursor or history, and what a terminal sends.")
+
+(defun prowj-runner-terminal-motion ()
+  "Send the key's terminal sequence to a line editor reading its terminal.
+That is while typing, while the command reads, and while it edits the
+line itself (readline, say); the cursor and history are then its own.
+Otherwise the key runs its global command, moving around the output."
+  (interactive)
+  (let* ((keys (this-command-keys-vector))
+         (keys (if (length> keys 0) keys (vector last-command-event)))
+         (sequence (cdr (assoc (key-description keys)
+                               prowj-runner-terminal-motion-keys))))
+    (if-let* ((sequence)
+              (process (prowj-runner-terminal-key-process))
+              ((prowj-runner-terminal-raw-p process)))
+        (prowj-runner-send-terminal process sequence)
+      (prowj-runner-global-command keys))))
 
 (defun prowj-runner-send-input ()
   "Read one line and send it to the current project command's standard input.
@@ -412,7 +463,9 @@ An empty line is allowed.  Input is not added to the log or input history."
               prowj-runner-trimmed-characters 0
               prowj-runner-line-column 0
               prowj-runner-line-elided nil
-              prowj-runner-output-line 1)
+              prowj-runner-output-line 1
+              prowj-runner-terminal-column 0
+              prowj-runner-terminal-pending "")
   (prowj-runner-setup-appearance)
   (buffer-disable-undo)
   (dolist (mode '(display-line-numbers-mode auto-highlight-symbol-mode))
@@ -442,6 +495,8 @@ An empty line is allowed.  Input is not added to the log or input history."
 (define-key prowj-run-mode-map (kbd "M-<backspace>") #'prowj-runner-delete-word-input)
 (define-key prowj-run-mode-map (kbd "C-w") #'prowj-runner-delete-word-input)
 (define-key prowj-run-mode-map (kbd "C-d") #'prowj-runner-eof-input)
+(dolist (key prowj-runner-terminal-motion-keys)
+  (define-key prowj-run-mode-map (kbd (car key)) #'prowj-runner-terminal-motion))
 (define-key prowj-run-mode-map (kbd "C-c C-i") #'prowj-runner-send-input)
 (define-key prowj-run-mode-map (kbd "C-c C-r") #'prowj-runner-rerun)
 (define-key prowj-run-mode-map (kbd "C-c C-k") #'prowj-runner-stop)
@@ -575,6 +630,160 @@ Only the bounded preview is scanned; no filesystem access is performed here."
     (prowj-runner-refresh-input)))
 
 
+;;;; Terminal cursor on the last line of a pty run
+
+;; A pty run's line editor (readline, say) moves its cursor with
+;; backspaces, carriage returns and CSI sequences and redraws the line
+;; around it.  The run buffer follows that on its last line: a column
+;; stands for the cursor, text overwrites from it, and only a newline
+;; moves on.  Cursor motion across lines, as full-screen programs use,
+;; is not followed; those belong in a terminal emulator.
+
+(defconst prowj-runner-terminal-control-regexp
+  (concat "\\(\e\\][^\a\e]*\\(?:\a\\|\e\\\\\\)\\)" ; 1: OSC
+          "\\|\r\\|\b\\|\a"
+          "\\|\e\\[\\([0-9;]*\\)\\([@CDGKPX]\\)")   ; 2: parameters, 3: final
+  "Terminal controls a pty run renders itself.
+Other CSI sequences, such as colors, are left to `ansi-color-apply'.")
+
+(defconst prowj-runner-terminal-partial-regexp
+  "\e\\(?:\\[[0-9;?]*\\|\\][^\a\e]*\e?\\)?\\'"
+  "An escape sequence cut off at the end of a chunk of output.")
+
+(defun prowj-runner-terminal-line-start ()
+  "Return the start of the last line, where the terminal cursor is."
+  (save-excursion (goto-char (point-max)) (pos-bol)))
+
+(defun prowj-runner-terminal-goto (column &optional pad)
+  "Move to COLUMN of the last line.
+With PAD, extend a shorter line with spaces, as writing there would."
+  (goto-char (prowj-runner-terminal-line-start))
+  (move-to-column column pad))
+
+(defun prowj-runner-terminal-point ()
+  "Return the position of the terminal cursor, or the end of the output."
+  (save-excursion
+    (prowj-runner-terminal-goto prowj-runner-terminal-column)
+    (point)))
+
+(defun prowj-runner-terminal-write (text)
+  "Write TEXT at the terminal cursor, overwriting as a terminal does.
+A newline ends the last line wherever the cursor is."
+  (let ((start 0))
+    (while (< start (length text))
+      (let* ((newline (string-search "\n" text start))
+             (end (or newline (length text))))
+        (when (< start end)
+          (let* ((piece (substring text start end))
+                 (width (string-width piece)))
+            (prowj-runner-terminal-goto prowj-runner-terminal-column t)
+            (let ((from (point)))
+              (move-to-column (+ prowj-runner-terminal-column width))
+              (delete-region from (point)))
+            (insert piece)
+            (cl-incf prowj-runner-terminal-column width)))
+        (when newline
+          (goto-char (point-max))
+          (insert "\n")
+          (setq prowj-runner-terminal-column 0))
+        (setq start (if newline (1+ newline) end))))))
+
+(defun prowj-runner-terminal-erase (from-column to-column)
+  "Blank FROM-COLUMN up to TO-COLUMN of the last line, keeping its length."
+  (when (< from-column to-column)
+    (prowj-runner-terminal-goto from-column t)
+    (let ((from (point)))
+      (move-to-column to-column)
+      (let ((width (- (current-column)
+                      (save-excursion (goto-char from) (current-column)))))
+        (delete-region from (point))
+        (insert (make-string width ?\s))))))
+
+(defun prowj-runner-terminal-csi (final parameter)
+  "Carry out the CSI sequence ending in FINAL with numeric PARAMETER.
+PARAMETER is nil when the sequence gives none."
+  (let ((count (max 1 (or parameter 1)))
+        (column prowj-runner-terminal-column))
+    (pcase final
+      (?C (setq prowj-runner-terminal-column (+ column count)))
+      (?D (setq prowj-runner-terminal-column (max 0 (- column count))))
+      (?G (setq prowj-runner-terminal-column (1- count)))
+      (?K (pcase (or parameter 0)
+            (0 (prowj-runner-terminal-goto column)
+               (delete-region (point) (point-max)))
+            (1 (prowj-runner-terminal-erase 0 (1+ column)))
+            (_ (delete-region (prowj-runner-terminal-line-start) (point-max)))))
+      (?P (prowj-runner-terminal-goto column)
+          (let ((from (point)))
+            (move-to-column (+ column count))
+            (delete-region from (point))))
+      (?@ (prowj-runner-terminal-goto column t)
+          (insert (make-string count ?\s)))
+      (?X (prowj-runner-terminal-erase column (+ column count))))))
+
+(defun prowj-runner-terminal-text (text)
+  "Archive TEXT and write its bounded, colored preview at the cursor."
+  (let ((colored (ansi-color-apply text)))
+    (unless (string-empty-p colored)
+      (prowj-runner-archive colored)
+      (prowj-runner-terminal-write (prowj-runner-preview colored)))))
+
+(defun prowj-runner-terminal-output (text)
+  "Render pty output TEXT on the last line as a terminal would.
+Keep the scroll position unless following the terminal cursor."
+  (setq text (concat prowj-runner-terminal-pending text)
+        prowj-runner-terminal-pending "")
+  (when-let* ((partial (string-match prowj-runner-terminal-partial-regexp text))
+              ((< (- (length text) partial) 4096)))
+    (setq prowj-runner-terminal-pending (substring text partial)
+          text (substring text 0 partial)))
+  (let* ((inhibit-read-only t)
+         (cursor (prowj-runner-terminal-point))
+         (following (memq (point) (list cursor (point-max))))
+         (windows (cl-remove-if-not
+                   (lambda (window) (memq (window-point window) (list cursor (point-max))))
+                   (get-buffer-window-list (current-buffer) nil t)))
+         (fresh (prowj-runner-terminal-line-start))
+         (start 0))
+    (save-excursion
+      (while (string-match prowj-runner-terminal-control-regexp text start)
+        (let ((control (match-string 0 text))
+              (osc (match-string 1 text))
+              (final (match-string 3 text))
+              (parameter (match-string 2 text))
+              (end (match-end 0)))
+          (prowj-runner-terminal-text (substring text start (match-beginning 0)))
+          (cond
+           (osc
+            ;; Zero width once applied: title, directory, hyperlink.
+            (prowj-runner-terminal-goto prowj-runner-terminal-column t)
+            (let ((from (point)))
+              (insert osc)
+              (ansi-osc-apply-on-region from (point))))
+           (final
+            (prowj-runner-terminal-csi
+             (aref final 0)
+             (and (string-match "\\`[0-9]+" parameter)
+                  (string-to-number (match-string 0 parameter)))))
+           ((equal control "\r")
+            (prowj-runner-archive control)
+            (setq prowj-runner-terminal-column 0))
+           ((equal control "\b")
+            (prowj-runner-archive control)
+            (setq prowj-runner-terminal-column
+                  (max 0 (1- prowj-runner-terminal-column)))))
+          ;; A bell is rung by terminals, not shown, so it is dropped.
+          ;; The preview's line budget follows the cursor.
+          (setq prowj-runner-line-column prowj-runner-terminal-column
+                start end)))
+      (prowj-runner-terminal-text (substring text start))
+      (prowj-runner-link-sources (min fresh (point-max)) (point-max)))
+    (prowj-runner-trim-output)
+    (let ((cursor (prowj-runner-terminal-point)))
+      (when following (goto-char cursor))
+      (dolist (window windows) (set-window-point window cursor)))
+    (prowj-runner-refresh-input)))
+
 (defun prowj-runner-open-full-log ()
   "Open the complete text log of the current project run."
   (interactive)
@@ -648,6 +857,8 @@ Only the bounded preview is scanned; no filesystem access is performed here."
   (when-let* ((buffer (process-buffer process))
               ((buffer-live-p buffer)))
     (with-current-buffer buffer
+      (if (process-tty-name process)
+          (prowj-runner-terminal-output text)
       (let ((colored (ansi-color-apply text)))
         ;; Save before trimming; escape sequences split across chunks are kept
         ;; in ansi-color-context and completed on the next filter invocation.
@@ -655,7 +866,7 @@ Only the bounded preview is scanned; no filesystem access is performed here."
           (prowj-runner-archive colored)
           (let ((preview (prowj-runner-preview colored)))
             (unless (string-empty-p preview)
-              (prowj-runner-insert-output preview))))))))
+              (prowj-runner-insert-output preview)))))))))
 
 (defun prowj-runner-logs-in-use ()
   "Return the log files of runs that are still writing."

@@ -158,10 +158,24 @@ TTY on standard input and output, and stderr shares the terminal with stdout.
 Typed input is echoed, so it appears in the output and in the archived log.
 
 =C-<backspace>=, =M-DEL= (=M-<backspace>=), =C-w= (erase a word) and =C-d=
-(end of input on an empty line) go to the command only while one of its
+(end of input on an empty line) go to the command only while typing -- in
+Meow's insert state, or always without Meow -- and while one of its
 processes is blocked reading the terminal, judged from =/proc/PID/syscall=
 of the command's process tree.  Otherwise, and on remote hosts, they run
-their global Emacs commands.
+their global Emacs commands, so Meow's normal state browses the output.
+
+=C-a=, =C-e=, =C-b=, =C-f=, the arrow keys, =<home>= and =<end>= go to the
+command under the same conditions when it also edits the line itself, that
+is when the terminal is out of canonical mode (=stty -icanon=, as readline
+sets it).  The line editor then moves its cursor within the input, stopping
+at the prompt, and =<up>= and =<down>= walk its history.  In canonical mode
+the terminal has no cursor motion, so these keys stay Emacs's.
+
+The last line of a pty run follows the terminal's cursor: backspace,
+carriage return and the CSI sequences for cursor motion (=C=, =D=, =G=),
+erasing (=K=, =X=), deleting (=P=) and inserting (=@=) characters move it or
+edit around it, text overwrites from it, and Emacs's point follows it.
+Cursor motion across lines, as full-screen programs use, is not followed.
 
 With =prowj-use-pty= set to =nil= the command runs on a pipe: Enter sends one
 line of pending input, empty Enter sends a blank line, Backspace deletes
