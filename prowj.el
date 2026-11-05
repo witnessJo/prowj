@@ -23,15 +23,6 @@
 
 (require 'prowj-runner)
 
-(defcustom prowj-use-pty t
-  "Legacy setting, ignored by the pipe-based project runner."
-  :type 'boolean
-  :group 'prowj)
-
-(make-obsolete-variable 'prowj-use-pty
-                        "Runs use a pipe with line input; use a terminal for TTY-dependent commands."
-                        "0.2.0")
-
 (defcustom prowj-exec-command-frame-enable nil
   "Enable to execute command in the new frame."
   :type 'boolean

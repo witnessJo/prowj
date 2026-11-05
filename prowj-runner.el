@@ -53,6 +53,25 @@ Older logs are deleted when a run starts, however few
   "Log words to emphasize case-insensitively, preserving their ANSI colors."
   :type '(repeat string))
 
+(defcustom prowj-use-pty t
+  "Non-nil runs commands on a pty set up like an ordinary terminal.
+Typed keys then go straight to the command and the terminal edits the
+line, as in a shell.  nil runs commands on a pipe and collects one line
+of input in Emacs before sending it.  The change applies to commands
+started afterwards."
+  :type 'boolean)
+
+(defconst prowj-runner-stty-settings "echo erase '^?' kill '^U' werase '^W' iutf8"
+  "Terminal settings for a run's pty.
+Emacs opens ptys without echo or erase and kill characters, because
+comint edits lines itself; a run buffer leaves editing to the terminal.")
+
+(defconst prowj-runner-tty-wait-syscalls
+  (if (string-prefix-p "aarch64" system-configuration)
+      '(63 72 73)
+    '(0 7 23 270 271))
+  "Syscall numbers of read, then of poll and select, on this machine.")
+
 (defvar ghostel-color-palette)
 (defvar ghostel-bold-color)
 
@@ -214,48 +233,152 @@ Older logs are deleted when a run starts, however few
                    (concat (propertize prowj-runner-input 'face 'font-lock-string-face)
                            (propertize " " 'cursor t))))))
 
+(defun prowj-runner-pty-process ()
+  "Return the current run buffer's live pty process, or nil."
+  (when-let* ((process (get-buffer-process (current-buffer)))
+              ((process-live-p process))
+              ((process-tty-name process)))
+    process))
+
+(defun prowj-runner-send-terminal (process string)
+  "Send STRING to the terminal of PROCESS and follow the end of the output."
+  (process-send-string process string)
+  (goto-char (point-max)))
+
+(defun prowj-runner-read-proc (pid file)
+  "Return the contents of /proc/PID/FILE, or nil when it cannot be read."
+  (ignore-errors
+    (with-temp-buffer
+      (insert-file-contents (format "/proc/%d/%s" pid file))
+      (buffer-string))))
+
+(defun prowj-runner-descendants (pid)
+  "Return PID and the ids of all its descendant processes."
+  (let ((pending (list pid)) result)
+    (while pending
+      (let ((current (pop pending)))
+        (push current result)
+        (dolist (task (ignore-errors
+                        (directory-files (format "/proc/%d/task" current)
+                                         nil "\\`[0-9]+\\'")))
+          (dolist (child (split-string
+                          (or (prowj-runner-read-proc
+                               current (format "task/%s/children" task))
+                              "")))
+            (push (string-to-number child) pending)))))
+    result))
+
+(defun prowj-runner-pid-reading-tty-p (pid tty)
+  "Return non-nil when PID waits to read TTY on its standard input."
+  (when (equal (file-symlink-p (format "/proc/%d/fd/0" pid)) tty)
+    (let ((syscall (split-string (or (prowj-runner-read-proc pid "syscall") ""))))
+      (if (and syscall (string-match-p "\\`[0-9]+\\'" (car syscall)))
+          (let ((number (string-to-number (car syscall))))
+            (if (= number (car prowj-runner-tty-wait-syscalls))
+                (equal (cadr syscall) "0x0")
+              (memq number (cdr prowj-runner-tty-wait-syscalls))))
+        ;; No syscall to look at: a tty read sleeps in `wait_woken'.
+        (member (prowj-runner-read-proc pid "wchan") '("wait_woken" "n_tty_read"))))))
+
+(defun prowj-runner-process-reading-p (process)
+  "Return non-nil when a process of the pty PROCESS is reading its terminal.
+Local runs only: /proc of a remote host is out of reach."
+  (when-let* ((tty (process-tty-name process))
+              (pid (process-id process))
+              ((not (file-remote-p default-directory))))
+    (seq-some (lambda (child) (prowj-runner-pid-reading-tty-p child tty))
+              (prowj-runner-descendants pid))))
+
+(defun prowj-runner-global-command (keys)
+  "Run the global binding of KEYS, a vector, as if the run buffer had none.
+Empty KEYS stand for `last-command-event'."
+  (let ((command (lookup-key global-map (if (length> keys 0) keys
+                                          (vector last-command-event)))))
+    (if (commandp command)
+        (progn (setq this-command command)
+               (call-interactively command))
+      (ding))))
+
 (defun prowj-runner-insert-input (count)
-  "Append COUNT copies of the typed character to pending process input."
+  "Enter COUNT copies of the typed character as process input.
+A pty run receives them at once; a pipe run collects them as pending
+input."
   (interactive "p")
-  (prowj-runner-input-process)
-  (unless (characterp last-command-event)
-    (user-error "Use printable characters to enter process input"))
-  (setq prowj-runner-input
-        (concat prowj-runner-input (make-string count last-command-event)))
-  (goto-char (point-max))
-  (prowj-runner-refresh-input))
+  (let ((process (prowj-runner-input-process)))
+    (unless (characterp last-command-event)
+      (user-error "Use printable characters to enter process input"))
+    (if (process-tty-name process)
+        (prowj-runner-send-terminal process (make-string count last-command-event))
+      (setq prowj-runner-input
+            (concat prowj-runner-input (make-string count last-command-event)))
+      (goto-char (point-max))
+      (prowj-runner-refresh-input))))
 
 (defun prowj-runner-delete-input ()
-  "Delete the last pending input character without editing output."
+  "Delete the last input character without editing output."
   (interactive)
-  (unless (string-empty-p prowj-runner-input)
-    (setq prowj-runner-input (substring prowj-runner-input 0 -1)))
-  (goto-char (point-max))
-  (prowj-runner-refresh-input))
+  (if-let* ((process (prowj-runner-pty-process)))
+      (prowj-runner-send-terminal process "\177")
+    (unless (string-empty-p prowj-runner-input)
+      (setq prowj-runner-input (substring prowj-runner-input 0 -1)))
+    (goto-char (point-max))
+    (prowj-runner-refresh-input)))
 
-(defun prowj-runner-clear-input ()
-  "Discard pending input."
-  (interactive)
+(defun prowj-runner-reset-input ()
+  "Forget pending pipe input, sending nothing to the command."
   (setq prowj-runner-input "")
   (prowj-runner-refresh-input))
 
-(defun prowj-runner-yank-input ()
-  "Append a single line from the kill ring to pending input."
+(defun prowj-runner-clear-input ()
+  "Discard the input line typed so far."
   (interactive)
-  (prowj-runner-input-process)
-  (let ((text (current-kill 0)))
-    (when (string-match-p "[\n\r]" text)
-      (user-error "Paste a single line, then press Enter to send it"))
-    (setq prowj-runner-input (concat prowj-runner-input text)))
-  (goto-char (point-max))
-  (prowj-runner-refresh-input))
+  (if-let* ((process (prowj-runner-pty-process)))
+      (prowj-runner-send-terminal process "\C-u")
+    (setq prowj-runner-input "")
+    (prowj-runner-refresh-input)))
+
+(defun prowj-runner-yank-input ()
+  "Paste the latest kill as process input.
+A pty run receives it as a terminal paste; a pipe run takes one line."
+  (interactive)
+  (let ((process (prowj-runner-input-process))
+        (text (current-kill 0)))
+    (if (process-tty-name process)
+        (prowj-runner-send-terminal process (substring-no-properties text))
+      (when (string-match-p "[\n\r]" text)
+        (user-error "Paste a single line, then press Enter to send it"))
+      (setq prowj-runner-input (concat prowj-runner-input text))
+      (goto-char (point-max))
+      (prowj-runner-refresh-input))))
 
 (defun prowj-runner-submit-input ()
-  "Send pending input followed by a newline, allowing an empty line."
+  "End the input line and send it, allowing an empty line."
   (interactive)
-  (process-send-string (prowj-runner-input-process) (concat prowj-runner-input "\n"))
-  (prowj-runner-clear-input)
-  (goto-char (point-max)))
+  (let ((process (prowj-runner-input-process)))
+    (if (process-tty-name process)
+        (prowj-runner-send-terminal process "\r")
+      (process-send-string process (concat prowj-runner-input "\n"))
+      (prowj-runner-clear-input)
+      (goto-char (point-max)))))
+
+(defun prowj-runner-delete-word-input ()
+  "Erase the last word typed while the command reads its terminal.
+Otherwise, and in pipe runs, run the key's global command."
+  (interactive)
+  (if-let* ((process (prowj-runner-pty-process))
+            ((prowj-runner-process-reading-p process)))
+      (prowj-runner-send-terminal process "\C-w")
+    (prowj-runner-global-command (this-command-keys-vector))))
+
+(defun prowj-runner-eof-input ()
+  "Send end of input while the command reads its terminal.
+On an empty line the command reads end of file.  Otherwise, and in pipe
+runs, run the key's global command."
+  (interactive)
+  (if-let* ((process (prowj-runner-pty-process))
+            ((prowj-runner-process-reading-p process)))
+      (prowj-runner-send-terminal process "\C-d")
+    (prowj-runner-global-command (this-command-keys-vector))))
 
 (defun prowj-runner-send-input ()
   "Read one line and send it to the current project command's standard input.
@@ -276,7 +399,7 @@ An empty line is allowed.  Input is not added to the log or input history."
               next-error-function #'prowj-runner-next-error)
   (prowj-runner-setup-buffer)
   (add-hook 'change-major-mode-hook #'prowj-runner-remove-input-overlay nil t)
-  (prowj-runner-clear-input))
+  (prowj-runner-reset-input))
 
 (defun prowj-runner-setup-buffer ()
   "Configure bounded project command output."
@@ -313,6 +436,12 @@ An empty line is allowed.  Input is not added to the log or input history."
 (define-key prowj-run-mode-map (kbd "<backspace>") #'prowj-runner-delete-input)
 (define-key prowj-run-mode-map (kbd "C-u") #'prowj-runner-clear-input)
 (define-key prowj-run-mode-map (kbd "C-y") #'prowj-runner-yank-input)
+;; Emacs commands, except while a pty run's command reads its terminal.
+(define-key prowj-run-mode-map (kbd "C-<backspace>") #'prowj-runner-delete-word-input)
+(define-key prowj-run-mode-map (kbd "M-DEL") #'prowj-runner-delete-word-input)
+(define-key prowj-run-mode-map (kbd "M-<backspace>") #'prowj-runner-delete-word-input)
+(define-key prowj-run-mode-map (kbd "C-w") #'prowj-runner-delete-word-input)
+(define-key prowj-run-mode-map (kbd "C-d") #'prowj-runner-eof-input)
 (define-key prowj-run-mode-map (kbd "C-c C-i") #'prowj-runner-send-input)
 (define-key prowj-run-mode-map (kbd "C-c C-r") #'prowj-runner-rerun)
 (define-key prowj-run-mode-map (kbd "C-c C-k") #'prowj-runner-stop)
@@ -334,7 +463,7 @@ An empty line is allowed.  Input is not added to the log or input history."
   (let ((process (get-buffer-process (current-buffer))))
     (unless (and process (process-live-p process)) (user-error "No running command"))
     (interrupt-process process)
-    (prowj-runner-clear-input)))
+    (prowj-runner-reset-input)))
 
 (defun prowj-runner-open-source (button)
   "Open the source location stored on BUTTON."
@@ -619,8 +748,10 @@ listing or a completion prompt would stumble over."
     (prowj-runner-refresh-project (process-get process 'prowj-runner-project))))
 
 (defun prowj-runner-exec-command (directory command &optional new-frame)
-  "Run COMMAND in DIRECTORY with bounded logs and line-based standard input.
-Use a terminal for commands requiring a TTY or full-screen interfaces."
+  "Run COMMAND in DIRECTORY with bounded logs and direct standard input.
+With `prowj-use-pty' the command runs on a terminal-like pty; otherwise
+on a pipe with line input.  Use a terminal emulator for full-screen
+interfaces."
   (unless (file-directory-p directory)
     (user-error "Directory not found: %s" directory))
   (when (or (null command) (string-empty-p command))
@@ -635,7 +766,15 @@ Use a terminal for commands requiring a TTY or full-screen interfaces."
          (project (prowj-runner-project-key run-directory))
          (short-name (file-name-nondirectory (directory-file-name run-directory)))
          (name (format "*prowj:%s:%s*" short-name command))
-         (process-connection-type nil)
+         (process-connection-type prowj-use-pty)
+         (window (selected-window))
+         ;; The shell sets the pty up as a terminal before running COMMAND.
+         (run-command
+          (if prowj-use-pty
+              (format "stty %s rows %d cols %d 2>/dev/null; %s"
+                      prowj-runner-stty-settings (window-body-height window)
+                      (window-max-chars-per-line window) command)
+            command))
          (process-environment
           (append '("TERM=xterm-256color" "FORCE_COLOR=1" "PYTHONUNBUFFERED=1")
                   process-environment))
@@ -658,7 +797,7 @@ Use a terminal for commands requiring a TTY or full-screen interfaces."
             (prowj-runner-prepare-archive)
             ;; start-file-process-shell-command also handles TRAMP directories.
             (condition-case err
-                (let ((process (start-file-process-shell-command "prowj" buffer command)))
+                (let ((process (start-file-process-shell-command "prowj" buffer run-command)))
                   (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
                   (set-process-filter process #'prowj-runner-filter)
                   (set-process-sentinel process #'prowj-runner-sentinel)
@@ -673,6 +812,12 @@ Use a terminal for commands requiring a TTY or full-screen interfaces."
                (signal (car err) (cdr err)))))
           (switch-to-buffer buffer)
           (when new-frame (delete-other-windows))
+          ;; Fit the pty to the window now showing the run.
+          (when-let* ((process (get-buffer-process buffer))
+                      ((process-tty-name process))
+                      (shown (get-buffer-window buffer t)))
+            (set-process-window-size process (window-body-height shown)
+                                     (window-max-chars-per-line shown)))
           (prowj-reload-dir-locals))
       (when (and new-frame (frame-live-p parent-frame))
         (select-frame-set-input-focus parent-frame)))

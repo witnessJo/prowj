@@ -814,3 +814,53 @@ bound to the root directory."
     (let ((last-command-event ?a))
       (should-error (prowj-runner-insert-input 1) :type 'user-error))
     (should (equal prowj-runner-input ""))))
+
+(ert-deftest prowj-runner-test-terminal-input-through-pty ()
+  (skip-unless (and (file-directory-p "/proc/self/task")
+                    (executable-find "python3")))
+  (with-temp-buffer
+    (prowj-run-mode)
+    (setq default-directory temporary-file-directory)
+    (let* ((process-connection-type t)
+           (process (start-process-shell-command
+                     "prowj-pty-test" (current-buffer)
+                     (format "stty %s 2>/dev/null; python3 -c %s"
+                             prowj-runner-stty-settings
+                             (shell-quote-argument
+                              "import time\ntime.sleep(0.5)\nwhile True:\n  try: print('got', repr(input('> ')))\n  except EOFError: print('eof'); break")))))
+      (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
+      (set-process-filter process
+                          (lambda (process text)
+                            (with-current-buffer (process-buffer process)
+                              (prowj-runner-insert-output (ansi-color-apply text)))))
+      (cl-flet ((wait-for (predicate)
+                  (let ((deadline (+ (float-time) 5)))
+                    (while (and (< (float-time) deadline) (not (funcall predicate)))
+                      (accept-process-output process 0.05)))
+                  (funcall predicate)))
+        (unwind-protect
+            (progn
+              ;; Sleeping, not reading: C-w keeps its global command.
+              (should-not (prowj-runner-process-reading-p process))
+              (let ((ran nil))
+                (cl-letf (((symbol-function 'prowj-runner-global-command)
+                           (lambda (_keys) (setq ran t))))
+                  (prowj-runner-delete-word-input))
+                (should ran))
+              (should (wait-for (lambda () (prowj-runner-process-reading-p process))))
+              (dolist (character (string-to-list "hello world"))
+                (let ((last-command-event character)) (prowj-runner-insert-input 1)))
+              (prowj-runner-delete-word-input)
+              (dolist (character (string-to-list "한글!"))
+                (let ((last-command-event character)) (prowj-runner-insert-input 1)))
+              (prowj-runner-delete-input)
+              (prowj-runner-submit-input)
+              (should (wait-for (lambda () (string-search "got 'hello 한글'" (buffer-string)))))
+              (should (equal prowj-runner-input ""))
+              (let ((last-command-event ?x)) (prowj-runner-insert-input 1))
+              (prowj-runner-clear-input)
+              (should (wait-for (lambda () (prowj-runner-process-reading-p process))))
+              (prowj-runner-eof-input)
+              (prowj-runner-eof-input)
+              (should (wait-for (lambda () (string-search "eof" (buffer-string))))))
+          (delete-process process))))))

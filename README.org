@@ -145,16 +145,30 @@ through =prowj-annotation-command=, which follows
 it is the column saying a command runs somewhere else, which is worth
 seeing at a glance.  The completion category is =prowj-command=.
 
-Commands run asynchronously through =start-file-process-shell-command= with
-a pipe, in a =special-mode= derived log buffer.  TRAMP directories are
-handled by Emacs file handlers.  No compilation parser or terminal emulator
-is involved.
-Type directly in the log buffer and press Enter to send one line to standard
-input; empty Enter sends a blank line.  Backspace deletes pending input,
-=C-u= clears it, and =C-y= pastes a single line.  Pending input is kept
-separate from output and is not written to the archived log.
-Use a terminal for TTY-dependent prompts and full-screen applications.  The legacy
-=prowj-use-pty= variable is obsolete and no longer controls execution.
+Commands run asynchronously through =start-file-process-shell-command= in a
+=special-mode= derived log buffer.  TRAMP directories are handled by Emacs
+file handlers.  No compilation parser or terminal emulator is involved.
+
+By default (=prowj-use-pty= is =t=) a command runs on a pty set up like an
+ordinary terminal: echo, erase =^?=, kill =^U=, werase =^W=, UTF-8 and the
+window's size.  Type directly in the log buffer as in a terminal: characters,
+Backspace, Enter, =C-u= (erase the line) and =C-y= (paste the latest kill) go
+to the command at once, and the terminal edits the line.  The command sees a
+TTY on standard input and output, and stderr shares the terminal with stdout.
+Typed input is echoed, so it appears in the output and in the archived log.
+
+=C-<backspace>=, =M-DEL= (=M-<backspace>=), =C-w= (erase a word) and =C-d=
+(end of input on an empty line) go to the command only while one of its
+processes is blocked reading the terminal, judged from =/proc/PID/syscall=
+of the command's process tree.  Otherwise, and on remote hosts, they run
+their global Emacs commands.
+
+With =prowj-use-pty= set to =nil= the command runs on a pipe: Enter sends one
+line of pending input, empty Enter sends a blank line, Backspace deletes
+pending input, =C-u= clears it, and =C-y= pastes a single line.  Pending input
+is kept separate from output and is not written to the archived log.
+
+Use a terminal emulator for full-screen applications.
 
 ** Readable, bounded logs
 
