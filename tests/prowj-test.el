@@ -960,3 +960,24 @@ bound to the root directory."
                     (press "C-a")))
                 (should ran)))
           (delete-process process))))))
+
+(ert-deftest prowj-test-gradle-failure-reason ()
+  (should (equal (prowj-discover--gradle-failure
+                  "\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nUnable to download toolchain matching the requirements ({languageVersion=25})\n  from 'null'.\n\n* Try:\n> Run with --stacktrace.\n")
+                 "Unable to download toolchain matching the requirements ({languageVersion=25}) from 'null'."))
+  (should (equal (prowj-discover--gradle-failure "starting\nError: JAVA_HOME is not set\n\n")
+                 "Error: JAVA_HOME is not set"))
+  (should (string-prefix-p "no output" (prowj-discover--gradle-failure "")))
+  (should (= (length (prowj-discover--gradle-failure (make-string 1000 ?x))) 300)))
+
+(ert-deftest prowj-test-gradle-failure-is-reported ()
+  (prowj-test-with-project
+      '(("build.gradle" . "")
+        ("gradlew" . "#!/bin/sh\nprintf '\\n* What went wrong:\\nToolchain 25 missing\\n\\n* Try:\\n' >&2\nexit 1\n"))
+    (set-file-modes (expand-file-name "gradlew" prowj-test-root) #o755)
+    (let ((prowj-discover--gradle-cache (make-hash-table :test #'equal))
+          (messages nil))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args) (push (apply #'format-message format args) messages))))
+        (should-not (prowj-discover-gradle prowj-test-root)))
+      (should (equal (car messages) "Prowj: Gradle discovery failed: Toolchain 25 missing")))))

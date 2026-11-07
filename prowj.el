@@ -349,6 +349,23 @@ reason to fail the command list."
            (push (match-string 1 line) tasks)))))
     (delete-dups (nreverse tasks))))
 
+(defun prowj-discover--gradle-failure (output)
+  "Return the reason Gradle gives in OUTPUT for failing, on one line.
+That is the paragraph after \"What went wrong:\", or else the last
+non-blank line; long reasons are cut short."
+  (let* ((lines (mapcar #'string-trim (split-string output "\n")))
+         (wrong (seq-drop-while
+                 (lambda (line) (not (string-suffix-p "What went wrong:" line)))
+                 lines))
+         (reason (if wrong
+                     (string-join (seq-take-while (lambda (line) (not (string-empty-p line)))
+                                                  (cdr wrong))
+                                  " ")
+                   (car (last (seq-remove #'string-empty-p lines))))))
+    (if (or (null reason) (string-empty-p reason))
+        "no output; run Gradle tasks in a terminal to see why"
+      (truncate-string-to-width reason 300 nil nil "…"))))
+
 (defun prowj-discover--gradle-output (root launcher)
   "Run LAUNCHER's task report in ROOT, with a bounded wait."
   (let ((default-directory root)
@@ -369,11 +386,19 @@ reason to fail the command list."
           (let ((deadline (+ (float-time) prowj-discover-gradle-timeout)))
             (while (and (process-live-p process) (< (float-time) deadline))
               (accept-process-output process 0.1)))
-          (if (and (eq (process-status process) 'exit)
-                   (zerop (process-exit-status process)))
-              (with-current-buffer buffer (buffer-string))
-            (message "Prowj: Gradle discovery failed or timed out; run Gradle tasks in a terminal and retry")
-            nil))
+          (cond
+           ((and (eq (process-status process) 'exit)
+                 (zerop (process-exit-status process)))
+            (with-current-buffer buffer (buffer-string)))
+           ((process-live-p process)
+            (message "Prowj: Gradle discovery timed out after %s seconds; run Gradle tasks in a terminal and retry"
+                     prowj-discover-gradle-timeout)
+            nil)
+           (t
+            (message "Prowj: Gradle discovery failed: %s"
+                     (prowj-discover--gradle-failure
+                      (with-current-buffer buffer (buffer-string))))
+            nil)))
       (when (and process (process-live-p process)) (delete-process process))
       (kill-buffer buffer))))
 

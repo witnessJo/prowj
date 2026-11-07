@@ -113,7 +113,9 @@ build scripts or plugins, use =M-x prowj-gradle-refresh-tasks= to clear the
 cache and reopen the list. Failed reports are retried on the next opening.
 =prowj-discover-gradle-timeout= limits discovery to 30 seconds by default;
 if a first download takes longer, run =./gradlew tasks --all= in a terminal
-first, or increase that setting. TRAMP Gradle discovery is not supported.
+first, or increase that setting. When Gradle fails, the message shows its
+reason (the "What went wrong" paragraph), such as a missing JDK toolchain.
+TRAMP Gradle discovery is not supported.
 
 ** Choosing a command
 
